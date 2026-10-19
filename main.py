@@ -1,0 +1,50 @@
+import os
+import logging
+
+# Bersihkan sisa environment variable proxy agar tidak mengganggu koneksi
+for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+    os.environ.pop(key, None)
+
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram.request import HTTPXRequest
+from config import BOT_TOKEN
+from database import init_db
+from handlers import start, menu, callback
+from services.scheduler import start_scheduler
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
+async def _post_init(app):
+    start_scheduler(app.bot)
+
+def main():
+    init_db()
+    request = HTTPXRequest(httpx_kwargs={"trust_env": False})
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .request(request)
+        .post_init(_post_init)
+        .build()
+    )
+
+    app.add_handler(CommandHandler("start", start.start_cmd))
+    app.add_handler(CommandHandler("menu", start.start_cmd))
+    app.add_handler(CommandHandler("cancel", _cancel))
+    app.add_handler(CallbackQueryHandler(callback.handle_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu.handle_text))
+
+    logging.info("🚀 Benstar running...")
+    app.run_polling()
+
+async def _cancel(update, context):
+    from states import clear_state
+    from keyboards import menu_utama
+    clear_state(update.effective_user.id)
+    await update.message.reply_text("Dibatalkan.", reply_markup=menu_utama())
+
+if __name__ == "__main__":
+    main()
