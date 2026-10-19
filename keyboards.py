@@ -4,10 +4,27 @@ from config import HARI
 def menu_utama():
     return ReplyKeyboardMarkup(
         [["📅 Jadwal", "💰 Keuangan"],
-         ["➕ Tambah", "⚙️ Pengaturan"]],
+         ["➕ Tambah", "✏️ Edit"],
+         ["⚙️ Pengaturan"]],
         resize_keyboard=True,
         is_persistent=True
     )
+
+def menu_edit_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Edit Jadwal", callback_data="menu_edit:jadwal")],
+        [InlineKeyboardButton("Hapus Jadwal", callback_data="menu_edit:hapus_jadwal")],
+        [InlineKeyboardButton("💰 Edit Keuangan", callback_data="menu_edit:keuangan")],
+        [InlineKeyboardButton("Hapus Keuangan", callback_data="menu_edit:hapus_keuangan")],
+    ])
+
+def pilih_pemilik_jadwal_kb():
+    from config import USER_A_ID, USER_A_NAMA, USER_B_ID, USER_B_NAMA
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(USER_A_NAMA, callback_data=f"jf:pemilik:{USER_A_ID}")],
+        [InlineKeyboardButton(USER_B_NAMA, callback_data=f"jf:pemilik:{USER_B_ID}")],
+        [InlineKeyboardButton("Batal", callback_data="cancel")],
+    ])
 
 def pilih_hari_kb(prefix="jf:hari"):
     rows = []
@@ -45,7 +62,8 @@ def edit_field_kb_jadwal(jadwal_id: int):
          InlineKeyboardButton("Jam Mulai", callback_data=f"ej:{jadwal_id}:jam_mulai")],
         [InlineKeyboardButton("Jam Selesai", callback_data=f"ej:{jadwal_id}:jam_selesai"),
          InlineKeyboardButton("Mata Kuliah", callback_data=f"ej:{jadwal_id}:mk")],
-        [InlineKeyboardButton("Ruangan", callback_data=f"ej:{jadwal_id}:ruangan")],
+        [InlineKeyboardButton("Dosen", callback_data=f"ej:{jadwal_id}:dosen"),
+         InlineKeyboardButton("Ruangan", callback_data=f"ej:{jadwal_id}:ruangan")],
         [InlineKeyboardButton("❌ Batal", callback_data="cancel")],
     ])
 
@@ -58,15 +76,15 @@ def edit_field_kb_pen(pen_id: int):
     ])
 
 def nav_jadwal_kb(offset: int):
-    back = InlineKeyboardButton("◀️", callback_data=f"nav:{offset-1}")
-    home = InlineKeyboardButton("📅 Hari Ini", callback_data="nav:0")
-    fwd  = InlineKeyboardButton("▶️", callback_data=f"nav:{offset+1}")
+    back = InlineKeyboardButton("Sebelumnya", callback_data=f"nav:{offset-1}")
+    home = InlineKeyboardButton("Hari ini", callback_data="nav:0")
+    fwd  = InlineKeyboardButton("Berikutnya", callback_data=f"nav:{offset+1}")
     return InlineKeyboardMarkup([[back, home, fwd]])
 
 def nav_keuangan_kb(offset: int):
-    back = InlineKeyboardButton("◀️", callback_data=f"nav_pen:{offset-1}")
-    home = InlineKeyboardButton("📅 Minggu Ini", callback_data="nav_pen:0")
-    fwd  = InlineKeyboardButton("▶️", callback_data=f"nav_pen:{offset+1}")
+    back = InlineKeyboardButton("Sebelumnya", callback_data=f"nav_pen:{offset-1}")
+    home = InlineKeyboardButton("Minggu ini", callback_data="nav_pen:0")
+    fwd  = InlineKeyboardButton("Berikutnya", callback_data=f"nav_pen:{offset+1}")
     return InlineKeyboardMarkup([[back, home, fwd]])
 
 def tambah_menu_kb():

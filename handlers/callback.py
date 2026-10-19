@@ -1,6 +1,6 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from config import HARI, nama_user, partner_id, USER_A_ID, USER_B_ID
+from config import HARI, nama_user, partner_id, USER_A_ID, USER_B_ID, now_wib
 from database import db
 from helpers import esc, rupiah
 from keyboards import (
@@ -20,7 +20,36 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "add:pen":
         await add.start_add_pen(update, context)
 
+    # ---- Menu Edit ----
+    elif data == "menu_edit:jadwal":
+        await q.answer()
+        await jadwal.show_edit_jadwal_list(update, context)
+    elif data == "menu_edit:hapus_jadwal":
+        await q.answer()
+        await jadwal.show_delete_jadwal_list(update, context)
+    elif data == "menu_edit:keuangan":
+        await q.answer()
+        from handlers import keuangan
+        await keuangan.show_edit_keuangan_list(update, context)
+    elif data == "menu_edit:hapus_keuangan":
+        await q.answer()
+        from handlers import keuangan
+        await keuangan.show_delete_keuangan_list(update, context)
+
     # ---- Pilih hari (jadwal form) ----
+    elif data.startswith("jf:pemilik:"):
+        await q.answer()
+        owner_id = int(data.split(":")[2])
+        _, ctx = _load_state(uid)
+        ctx = ctx or {}
+        ctx["owner_id"] = owner_id
+        ctx["step"] = "hari"
+        set_state(uid, "jf", ctx)
+        await q.edit_message_text(
+            "Pilih hari kuliah:",
+            reply_markup=pilih_hari_kb("jf:hari"),
+        )
+
     elif data.startswith("jf:hari:"):
         await q.answer()
         hari = int(data.split(":")[2])
@@ -45,9 +74,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tanggal = __import__("helpers").tanggal_hari_ini()
         with db() as conn:
             conn.execute("""
-                INSERT INTO pengeluaran (nominal, keterangan, dibayar_oleh, tanggal)
-                VALUES (?, ?, ?, ?)
-            """, (ctx["nominal"], ctx["keterangan"], bayar_id, tanggal))
+                INSERT INTO pengeluaran
+                    (nominal, keterangan, dibayar_oleh, tanggal, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                ctx["nominal"],
+                ctx["keterangan"],
+                bayar_id,
+                tanggal,
+                now_wib().strftime("%Y-%m-%d %H:%M:%S"),
+            ))
             my_pref = conn.execute(
                 "SELECT notif_transaksi FROM preferences WHERE user_id=?",
                 (uid,)
@@ -77,7 +113,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("nav:"):
         await q.answer()
         offset = int(data.split(":")[1])
-        await jadwal._render_jadwal(update, context, offset, edit_mode=True)
+        await jadwal._render_jadwal(
+            update,
+            context,
+            offset,
+            edit_mode=True,
+            is_edit_list=False,
+        )
+
+    # ---- Navigasi edit jadwal ----
+    elif data.startswith("edit_nav:"):
+        await q.answer()
+        offset = int(data.split(":")[1])
+        await jadwal.show_edit_jadwal_list(update, context, offset=offset)
+    elif data.startswith("delete_nav:"):
+        await q.answer()
+        offset = int(data.split(":")[1])
+        await jadwal.show_delete_jadwal_list(update, context, offset=offset)
 
     # ---- Detail jadwal ----
     elif data.startswith("detail_jadwal:"):
@@ -91,6 +143,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         offset = int(data.split(":")[1])
         from handlers import keuangan
         await keuangan.show_keuangan(update, context, offset=offset, edit_mode=True)
+
+    # ---- Navigasi edit keuangan ----
+    elif data.startswith("edit_k_nav:"):
+        await q.answer()
+        _, offset_str, page_str = data.split(":")
+        from handlers import keuangan
+        await keuangan.show_edit_keuangan_list(
+            update,
+            context,
+            offset=int(offset_str),
+            page=int(page_str),
+        )
+    elif data.startswith("delete_k_nav:"):
+        await q.answer()
+        _, offset_str, page_str = data.split(":")
+        from handlers import keuangan
+        await keuangan.show_delete_keuangan_list(
+            update,
+            context,
+            offset=int(offset_str),
+            page=int(page_str),
+        )
 
     # ---- Edit jadwal: pilih field ----
     elif data.startswith("edit_jadwal:"):
@@ -114,7 +188,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             label = {"jam_mulai": "jam mulai", "jam_selesai": "jam selesai",
-                     "mk": "mata kuliah", "ruangan": "ruangan"}[field]
+                     "mk": "mata kuliah", "dosen": "dosen",
+                     "ruangan": "ruangan"}[field]
             set_state(uid, "ej_wait", {"jadwal_id": jid, "field": field})
             await q.edit_message_text(
                 f"Ketik {label} baru:\n\n<i>(/cancel untuk batal)</i>",
@@ -203,11 +278,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---- Hapus pengeluaran ----
     elif data.startswith("del_pen:"):
-        await q.answer("Dihapus")
+        await q.answer()
+        pid = int(data.split(":")[1])
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "Ya, hapus", callback_data=f"confirm_del_pen:{pid}"
+                ),
+                InlineKeyboardButton("Batal", callback_data="cancel"),
+            ]
+        ])
+        await q.edit_message_text("Hapus transaksi ini?", reply_markup=kb)
+
+    elif data.startswith("confirm_del_pen:"):
+        await q.answer()
         pid = int(data.split(":")[1])
         with db() as conn:
             conn.execute("UPDATE pengeluaran SET dihapus=1 WHERE id=?", (pid,))
-        await q.edit_message_text("🗑 Pengeluaran dihapus.")
+        await q.edit_message_text("Pengeluaran dihapus.")
 
     # ---- Settings: toggle ----
     elif data.startswith("set:tg:"):

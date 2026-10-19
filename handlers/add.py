@@ -3,7 +3,10 @@ from telegram.ext import ContextTypes
 from config import HARI, nama_user
 from database import db
 from helpers import valid_jam, valid_nominal, rupiah, esc
-from keyboards import pilih_hari_kb, pilih_bayar_kb, menu_utama, aksi_jadwal_kb, aksi_pen_kb
+from keyboards import (
+    pilih_hari_kb, pilih_pemilik_jadwal_kb, pilih_bayar_kb, menu_utama,
+    aksi_jadwal_kb, aksi_pen_kb,
+)
 from states import set_state, clear_state
 
 # Buat keyboard batal sekali saja
@@ -15,8 +18,8 @@ async def start_add_jadwal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(uid, "jf", {"step": "hari"})
     await q.answer()
     await q.edit_message_text(
-        "Pilih hari kuliah:",
-        reply_markup=pilih_hari_kb("jf:hari")
+        "Jadwal ini untuk siapa?",
+        reply_markup=pilih_pemilik_jadwal_kb()
     )
 
 async def start_add_pen(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -66,10 +69,19 @@ async def _handle_jadwal_form(update, uid, ctx, text):
         if not text:
             return
         ctx["mata_kuliah"] = text
+        ctx["step"] = "dosen"
+        set_state(uid, "jf", ctx)
+        await update.message.reply_text(
+            "Nama dosen? (ketik <code>/skip</code> kalau tidak ada)",
+            parse_mode="HTML", reply_markup=KB_BATAL
+        )
+
+    elif step == "dosen":
+        ctx["dosen"] = None if text.lower() in ("/skip", "skip", "-") else text
         ctx["step"] = "ruangan"
         set_state(uid, "jf", ctx)
         await update.message.reply_text(
-            "Ruangan? (ketik <code>/skip</code> kalau tidak ada)", 
+            "Ruangan? (ketik <code>/skip</code> kalau tidak ada)",
             parse_mode="HTML", reply_markup=KB_BATAL
         )
 
@@ -78,9 +90,13 @@ async def _handle_jadwal_form(update, uid, ctx, text):
         hari = ctx["hari"]
         with db() as conn:
             conn.execute("""
-                INSERT INTO jadwal (user_id, hari, jam_mulai, jam_selesai, mata_kuliah, ruangan)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (uid, hari, ctx["jam_mulai"], ctx["jam_selesai"], ctx["mata_kuliah"], ruangan))
+                INSERT INTO jadwal
+                    (user_id, hari, jam_mulai, jam_selesai, mata_kuliah, dosen, ruangan)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                ctx.get("owner_id", uid), hari, ctx["jam_mulai"], ctx["jam_selesai"],
+                ctx["mata_kuliah"], ctx.get("dosen"), ruangan,
+            ))
         clear_state(uid)
         await update.message.reply_text(
             f"✅ Jadwal <b>{esc(ctx['mata_kuliah'])}</b> tersimpan!\n"
@@ -139,6 +155,7 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, state:
             "jam_mulai": "jam_mulai",
             "jam_selesai": "jam_selesai",
             "mk": "mata_kuliah",
+            "dosen": "dosen",
             "ruangan": "ruangan"
         }
         col = col_map.get(str(field))
@@ -157,6 +174,8 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, state:
                     reply_markup=KB_BATAL
                 )
                 return
+        elif field == "dosen":
+            val = None if text.lower() in ("/skip", "skip", "-") else text
         elif field == "ruangan":
             val = None if text.lower() in ("/skip", "skip", "-") else text
 

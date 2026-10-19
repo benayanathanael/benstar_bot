@@ -1,7 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import is_valid_user
-from keyboards import menu_utama, tambah_menu_kb
+from keyboards import menu_utama, tambah_menu_kb, menu_edit_kb
 from states import get_state, clear_state
 from handlers import jadwal, keuangan, settings, add
 
@@ -14,7 +14,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
     # ESCAPE HATCH: Jika user menekan menu utama saat di tengah form, reset!
-    if text in ["📅 Jadwal", "💰 Keuangan", "➕ Tambah", "⚙️ Pengaturan"]:
+    if text in ["📅 Jadwal", "💰 Keuangan", "➕ Tambah", "✏️ Edit", "⚙️ Pengaturan"]:
         clear_state(uid)
     else:
         # Kalau BUKAN menu utama, cek apakah sedang dalam form
@@ -32,6 +32,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Mau tambah apa?",
             reply_markup=tambah_menu_kb()
+        )
+    elif text == "✏️ Edit":
+        await update.message.reply_text(
+            "Pilih data yang mau diedit:",
+            reply_markup=menu_edit_kb()
         )
     elif text == "⚙️ Pengaturan":
         await settings.show_settings(update, context)

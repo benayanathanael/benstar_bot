@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS jadwal (
     jam_mulai TEXT NOT NULL,
     jam_selesai TEXT NOT NULL,
     mata_kuliah TEXT NOT NULL,
+    dosen TEXT,
     ruangan TEXT,
     aktif INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -60,6 +61,12 @@ def db():
 def init_db():
     with db() as conn:
         conn.executescript(SCHEMA)
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(jadwal)").fetchall()
+        }
+        if "dosen" not in columns:
+            conn.execute("ALTER TABLE jadwal ADD COLUMN dosen TEXT")
         for uid in (USER_A_ID, USER_B_ID):
             conn.execute(
                 "INSERT OR IGNORE INTO preferences (user_id) VALUES (?)", (uid,)
