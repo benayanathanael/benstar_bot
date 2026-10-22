@@ -16,6 +16,16 @@ def _jadwal_info(mata_kuliah: str, dosen: str | None = None) -> tuple[str, str |
 async def show_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _render_jadwal(update, context, offset=0, edit_mode=False, is_edit_list=False)
 
+async def show_hari(update: Update, context: ContextTypes.DEFAULT_TYPE, hari: int):
+    await _render_jadwal(
+        update,
+        context,
+        offset=0,
+        edit_mode=False,
+        is_edit_list=False,
+        hari_override=hari,
+    )
+
 async def show_edit_jadwal_list(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0):
     await _render_jadwal(
         update,
@@ -35,6 +45,17 @@ async def show_delete_jadwal_list(update: Update, context: ContextTypes.DEFAULT_
         delete_mode=True,
     )
 
+async def show_delete_jadwal_day(update: Update, context: ContextTypes.DEFAULT_TYPE, hari: int):
+    await _render_jadwal(
+        update,
+        context,
+        offset=0,
+        edit_mode=False,
+        is_edit_list=True,
+        delete_mode=True,
+        hari_override=hari,
+    )
+
 async def _render_jadwal(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -42,8 +63,9 @@ async def _render_jadwal(
     edit_mode: bool,
     is_edit_list: bool,
     delete_mode: bool = False,
+    hari_override: int | None = None,
 ):
-    hari = (now_wib().weekday() + offset) % 7
+    hari = hari_override if hari_override is not None else (now_wib().weekday() + offset) % 7
 
     with db() as conn:
         rows = conn.execute(
@@ -79,18 +101,17 @@ async def _render_jadwal(
             mk, dosen = _jadwal_info(r['mata_kuliah'], r['dosen'])
             lines = [
                 f"{idx}. <code>{r['jam_mulai']}-{r['jam_selesai']}</code>",
-                esc(mk),
+                f"Matkul : {esc(mk)}",
+                f"Dosen : {esc(dosen) if dosen else '-'}",
+                f"Ruangan : {esc(r['ruangan']) if r['ruangan'] else '-'}",
             ]
-            if dosen:
-                lines.append(esc(dosen))
-            if r["ruangan"]:
-                lines.append(f"Ruang: {esc(r['ruangan'])}")
             return "\n".join(lines)
 
         if jadwal_a:
             lines.append(f"<b>{nama_user(USER_A_ID)}</b>")
             for idx, r in enumerate(jadwal_a, start=1):
                 lines.append(format_row(r, idx))
+                lines.append("")
                 jadwal_ids.append(r['id'])
                 jadwal_labels.append(_jadwal_info(r['mata_kuliah'], r['dosen'])[0])
 
@@ -101,6 +122,7 @@ async def _render_jadwal(
             lines.append(f"<b>{nama_user(USER_B_ID)}</b>")
             for idx, r in enumerate(jadwal_b, start=1):
                 lines.append(format_row(r, idx))
+                lines.append("")
                 jadwal_ids.append(r['id'])
                 jadwal_labels.append(_jadwal_info(r['mata_kuliah'], r['dosen'])[0])
 

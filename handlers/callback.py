@@ -6,7 +6,7 @@ from helpers import esc, rupiah
 from keyboards import (
     pilih_hari_kb, edit_field_kb_jadwal, edit_field_kb_pen, aksi_jadwal_kb, aksi_pen_kb
 )
-from states import set_state, clear_state
+from states import set_state, get_state, clear_state
 from handlers import add, jadwal
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -40,7 +40,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("jf:pemilik:"):
         await q.answer()
         owner_id = int(data.split(":")[2])
-        _, ctx = _load_state(uid)
+        state, ctx = _load_state(uid)
+        if state == "jf_nl_owner" and ctx:
+            with db() as conn:
+                conn.execute("""
+                    INSERT INTO jadwal
+                        (user_id, hari, jam_mulai, jam_selesai, mata_kuliah, ruangan)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    owner_id,
+                    ctx["hari"],
+                    ctx["jam_mulai"],
+                    ctx["jam_selesai"],
+                    ctx["matkul"],
+                    ctx["ruangan"],
+                ))
+            clear_state(uid)
+            await q.edit_message_text(
+                f"✅ <b>Jadwal Otomatis Tersimpan!</b>\n\n"
+                f"📅 Hari: {HARI[ctx['hari']]}\n"
+                f"⏰ Jam: {ctx['jam_mulai']} - {ctx['jam_selesai']}\n"
+                f"📚 Matkul: {ctx['matkul']}\n"
+                f"📍 Ruang/Dosen: {ctx['ruangan']}\n"
+                f"👤 Pemilik: {nama_user(owner_id)}",
+                parse_mode="HTML",
+            )
+            return
+
         ctx = ctx or {}
         ctx["owner_id"] = owner_id
         ctx["step"] = "hari"
@@ -62,6 +88,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Hari: <b>{HARI[hari]}</b>\n\nJam mulai? (contoh: <code>08:00</code>)",
             parse_mode="HTML"
         )
+
+    # ---- Pilih Hari untuk Hasil Smart Parser Jadwal ----
+    elif data.startswith("jf_nl:"):
+        await q.answer()
+        hari = int(data.split(":")[1])
+        state, parsed = get_state(uid)
+
+        if state == "jf_nl_hari" and parsed:
+            with db() as conn:
+                conn.execute("""
+                    INSERT INTO jadwal
+                        (user_id, hari, jam_mulai, jam_selesai, mata_kuliah, ruangan)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    uid,
+                    hari,
+                    parsed["jam_mulai"],
+                    parsed["jam_selesai"],
+                    parsed["matkul"],
+                    parsed["ruangan"],
+                ))
+            clear_state(uid)
+            await q.edit_message_text(
+                f"✅ <b>Jadwal Otomatis Tersimpan!</b>\n\n"
+                f"📅 Hari: {HARI[hari]}\n"
+                f"⏰ Jam: {parsed['jam_mulai']} - {parsed['jam_selesai']}\n"
+                f"📚 Matkul: {parsed['matkul']}\n"
+                f"📍 Ruang/Dosen: {parsed['ruangan']}",
+                parse_mode="HTML",
+            )
+        else:
+            clear_state(uid)
+            await q.edit_message_text("Sesi kadaluarsa. Silakan ulangi dari menu.")
 
     # ---- Pilih pembayar (pen form) ----
     elif data.startswith("pf:bayar:"):
@@ -130,6 +189,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         offset = int(data.split(":")[1])
         await jadwal.show_delete_jadwal_list(update, context, offset=offset)
+
+    # ---- Pilih Hari untuk Hapus Jadwal Natural Language ----
+    elif data.startswith("del_nl:"):
+        await q.answer()
+        hari = int(data.split(":")[1])
+        await jadwal.show_delete_jadwal_day(update, context, hari)
 
     # ---- Detail jadwal ----
     elif data.startswith("detail_jadwal:"):

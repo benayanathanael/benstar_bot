@@ -1,8 +1,10 @@
+import re
+
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from config import HARI, nama_user
 from database import db
-from helpers import valid_jam, valid_nominal, rupiah, esc
+from helpers import valid_jam, valid_nominal, rupiah, esc, tanggal_hari_ini
 from keyboards import (
     pilih_hari_kb, pilih_pemilik_jadwal_kb, pilih_bayar_kb, menu_utama,
     aksi_jadwal_kb, aksi_pen_kb,
@@ -11,6 +13,108 @@ from states import set_state, clear_state
 
 # Buat keyboard batal sekali saja
 KB_BATAL = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Batal", callback_data="cancel")]])
+
+def parse_jadwal_text(text):
+    # 1. Ekstrak Jam (contoh: 07.00 - 09.30)
+    time_match = re.search(
+        r'(\d{1,2}[:.]\d{2})\s*(?:-|s/d|sampai)\s*(\d{1,2}[:.]\d{2})',
+        text,
+        re.IGNORECASE,
+    )
+    if not time_match:
+        return None
+
+    jm = time_match.group(1).replace('.', ':')
+    js = time_match.group(2).replace('.', ':')
+    if len(jm.split(':')[0]) == 1:
+        jm = '0' + jm
+    if len(js.split(':')[0]) == 1:
+        js = '0' + js
+
+    # 2. Ekstrak Matkul
+    mk_match = re.search(
+        r'(?:matkul|mata kuliah)\s+([^\n]+?)(?=\s+(?:hari|dosen|jam|ruang)|$)',
+        text,
+        re.IGNORECASE,
+    )
+    if mk_match:
+        mk = mk_match.group(1).strip()
+    else:
+        parts = re.split(r'dosen|jam|ruang', text, flags=re.IGNORECASE)
+        mk = parts[0].replace("aku mau nambah jadwal", "").replace("matkul", "").strip()
+
+    # 3. Ekstrak Ruangan & Dosen
+    r_match = re.search(r'ruang(?:an)?\s*[:=]?\s*([^\n]+)', text, re.IGNORECASE)
+    ruang = r_match.group(1).strip() if r_match else ""
+
+    d_match = re.search(r'dosen\s*[:=]?\s*([^\n]+)', text, re.IGNORECASE)
+    dosen = d_match.group(1).strip() if d_match else ""
+
+    if dosen and ruang:
+        ruang = f"{ruang} ({dosen})"
+    elif dosen:
+        ruang = dosen
+
+    # 4. Ekstrak Hari
+    hari_map = {
+        "senin": 0,
+        "selasa": 1,
+        "rabu": 2,
+        "kamis": 3,
+        "jumat": 4,
+        "sabtu": 5,
+        "minggu": 6,
+    }
+    hari = -1
+    for h_name, h_idx in hari_map.items():
+        if h_name in text.lower():
+            hari = h_idx
+            break
+
+    return {
+        "matkul": mk,
+        "jam_mulai": jm,
+        "jam_selesai": js,
+        "ruangan": ruang,
+        "hari": hari,
+    }
+
+def parse_pen_text(text):
+    amount_match = re.search(
+        r'(?<!\w)(\d{1,3}(?:[.,]\d{3})+|\d+)(?:\s*(rb|ribu|k))?(?!\w)',
+        text,
+        re.IGNORECASE,
+    )
+    if not amount_match:
+        return None
+
+    amount_text = amount_match.group(1).replace(".", "").replace(",", "")
+    nominal = int(amount_text)
+    unit = (amount_match.group(2) or "").lower()
+    if unit in ("rb", "ribu", "k"):
+        nominal *= 1000
+    if nominal <= 0 or nominal > 1_000_000_000:
+        return None
+
+    keterangan = (
+        text[:amount_match.start()] + " " + text[amount_match.end():]
+    )
+    keterangan = re.sub(
+        r'\b(?:aku|mau|nambah|tambah|tambahin|bikin|buat|catat|catet|input|'
+        r'pengeluaran|uang|duit|bayar|beli|habis)\b',
+        " ",
+        keterangan,
+        flags=re.IGNORECASE,
+    )
+    keterangan = re.sub(r'\s+', ' ', keterangan).strip(" :-")
+    if not keterangan:
+        keterangan = "Pengeluaran"
+
+    return {
+        "nominal": nominal,
+        "keterangan": keterangan,
+        "tanggal": tanggal_hari_ini(),
+    }
 
 async def start_add_jadwal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query

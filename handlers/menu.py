@@ -1,9 +1,14 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from config import is_valid_user
-from keyboards import menu_utama, tambah_menu_kb, menu_edit_kb
-from states import get_state, clear_state
+from config import is_valid_user, HARI, nama_user
+from database import db
+from keyboards import (
+    menu_utama, tambah_menu_kb, menu_edit_kb, pilih_hari_kb,
+    pilih_pemilik_jadwal_kb,
+)
+from states import get_state, clear_state, set_state
 from handlers import jadwal, keuangan, settings, add
+from helpers import rupiah
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -25,28 +30,97 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # ==========================================
-    # 3. NATURAL LANGUAGE ROUTING (Keyword Matching)
+    # 3. INTENT: TAMBAH DATA
     # ==========================================
 
-    # --- INTENT: TAMBAH DATA ---
-    if any(k in text_lower for k in ["tambah", "catat", "baru", "input"]):
-        if any(k in text_lower for k in ["jadwal", "kuliah", "kelas"]):
+    # 3a. INTENT: HAPUS JADWAL
+    if (
+        any(k in text_lower for k in ["hapus", "hapuskan", "hilangkan", "delete"])
+        and any(k in text_lower for k in ["jadwal", "kelas", "kuliah"])
+    ):
+        hari = next(
+            (index for index, nama in enumerate(HARI) if nama.lower() in text_lower),
+            -1,
+        )
+        if hari == -1:
+            await update.message.reply_text(
+                "Pilih hari jadwal yang mau dihapus:",
+                reply_markup=pilih_hari_kb(prefix="del_nl"),
+            )
+        else:
+            await jadwal.show_delete_jadwal_day(update, context, hari)
+        return
+
+    if any(k in text_lower for k in ["nambah", "tambah", "tambahin", "bikin", "buat", "catat", "input", "lupa", "catet"]):
+        if any(k in text_lower for k in ["jadwal", "kuliah", "kelas", "matkul", "mata kuliah"]):
+            parsed = add.parse_jadwal_text(text)
+
+            if parsed and parsed["jam_mulai"]:
+                if parsed["hari"] != -1:
+                    set_state(uid, "jf_nl_owner", parsed)
+                    await update.message.reply_text(
+                        f"Data jadwal terbaca:\n"
+                        f"📅 {HARI[parsed['hari']]} "
+                        f"{parsed['jam_mulai']}-{parsed['jam_selesai']}\n"
+                        f"📚 {parsed['matkul']}\n\n"
+                        "Jadwal ini untuk siapa?",
+                        reply_markup=pilih_pemilik_jadwal_kb(),
+                    )
+                else:
+                    set_state(uid, "jf_nl_hari", parsed)
+                    await update.message.reply_text(
+                        f"Data terbaca! Tapi ini hari apa?\n"
+                        f"(Matkul: {parsed['matkul']}, Jam: {parsed['jam_mulai']}-{parsed['jam_selesai']})",
+                        reply_markup=pilih_hari_kb(prefix="jf_nl"),
+                    )
+                return
+
             await add.start_add_jadwal_msg(update, context)
-        elif any(k in text_lower for k in ["uang", "pengeluaran", "beli", "bayar", "duit", "jajan"]):
-            await add.start_add_pen_msg(update, context)
+            return
+        elif any(k in text_lower for k in ["uang", "pengeluaran", "beli", "bayar", "duit", "jajan", "makan", "habis"]):
+            parsed = add.parse_pen_text(text)
+            if parsed:
+                with db() as conn:
+                    conn.execute("""
+                        INSERT INTO pengeluaran (nominal, keterangan, dibayar_oleh, tanggal)
+                        VALUES (?, ?, ?, ?)
+                    """, (parsed["nominal"], parsed["keterangan"], uid, parsed["tanggal"]))
+
+                await update.message.reply_text(
+                    f"✅ <b>Pengeluaran Otomatis Tersimpan!</b>\n\n"
+                    f"🧾 Keterangan: <b>{parsed['keterangan'].title()}</b>\n"
+                    f"💰 Nominal: {rupiah(parsed['nominal'])}\n"
+                    f"📅 Tanggal: {parsed['tanggal']}\n"
+                    f"👤 Pembayar: {nama_user(uid)}",
+                    parse_mode="HTML",
+                    reply_markup=menu_utama(),
+                )
+            else:
+                await add.start_add_pen_msg(update, context)
+            return
         else:
             await update.message.reply_text(
                 "Mau tambah apa nih? Jadwal kuliah atau pengeluaran?",
                 reply_markup=tambah_menu_kb()
             )
+            return
 
-    # --- INTENT: LIHAT JADWAL ---
-    elif any(k in text_lower for k in ["jadwal", "kelas", "kuliah"]):
-        await jadwal.show_hari_ini(update, context)
+    # 4. INTENT: LIHAT JADWAL
+    elif any(k in text_lower for k in ["lihat", "cek", "buka", "tampil", "jadwal", "kelas", "kuliah"]):
+        hari = next(
+            (index for index, nama in enumerate(HARI) if nama.lower() in text_lower),
+            -1,
+        )
+        if hari == -1:
+            await jadwal.show_hari_ini(update, context)
+        else:
+            await jadwal.show_hari(update, context, hari)
+        return
 
-    # --- INTENT: LIHAT KEUANGAN ---
+    # 5. INTENT: LIHAT KEUANGAN
     elif any(k in text_lower for k in ["uang", "keuangan", "pengeluaran", "duit", "bayar", "trx", "transaksi"]):
         await keuangan.show_keuangan(update, context)
+        return
 
     # --- INTENT: EDIT DATA ---
     elif any(k in text_lower for k in ["edit", "ubah", "ganti", "revisi", "salah"]):
