@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 from telegram.request import HTTPXRequest
 from config import BOT_TOKEN
 from database import init_db
-from handlers import start, menu, callback
+from handlers import start, menu, callback, jadwal, keuangan, add, settings
 from services.scheduler import start_scheduler
 
 logging.basicConfig(
@@ -33,6 +33,11 @@ def main():
 
     app.add_handler(CommandHandler("start", start.start_cmd))
     app.add_handler(CommandHandler("menu", start.start_cmd))
+    # Slash Commands (Natural Language)
+    app.add_handler(CommandHandler("jadwal", jadwal.show_hari_ini))
+    app.add_handler(CommandHandler("uang", keuangan.show_keuangan))
+    app.add_handler(CommandHandler("tambah", add.start_add_pen_msg))
+    app.add_handler(CommandHandler("setting", settings.show_settings))
     app.add_handler(CommandHandler("cancel", _cancel))
     app.add_handler(CallbackQueryHandler(callback.handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu.handle_text))

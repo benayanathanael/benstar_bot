@@ -241,3 +241,20 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, state:
             "Silakan pilih opsi pada tombol pesan sebelumnya, atau kirim /cancel untuk batal.",
             reply_markup=KB_BATAL
         )
+
+async def start_add_jadwal_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    set_state(update.effective_user.id, "jf", {"step": "hari", "mode": "add"})
+    await update.message.reply_text(
+        "📅 <b>Tambah Jadwal</b>\n\nPilih hari:",
+        parse_mode="HTML",
+        reply_markup=pilih_hari_kb()
+    )
+
+async def start_add_pen_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    set_state(update.effective_user.id, "pf", {"step": "nominal", "mode": "add"})
+    await update.message.reply_text(
+        "💰 <b>Catat Pengeluaran</b>\n\n"
+        "Ketik nominal (contoh: <code>45000</code> atau <code>45.000</code>):",
+        parse_mode="HTML",
+        reply_markup=KB_BATAL
+    )
