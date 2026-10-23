@@ -4,7 +4,8 @@ from config import HARI, nama_user, partner_id, USER_A_ID, USER_B_ID, now_wib
 from database import db
 from helpers import esc, rupiah
 from keyboards import (
-    pilih_hari_kb, edit_field_kb_jadwal, edit_field_kb_pen, aksi_jadwal_kb, aksi_pen_kb
+    pilih_hari_kb, edit_field_kb_jadwal, edit_field_kb_pen, aksi_jadwal_kb, aksi_pen_kb,
+    pilih_pemilik_jadwal_kb,
 )
 from states import set_state, get_state, clear_state
 from handlers import add, jadwal
@@ -19,6 +20,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await add.start_add_jadwal(update, context)
     elif data == "add:pen":
         await add.start_add_pen(update, context)
+
+    # ---- Aksi untuk daftar jadwal hasil parser ----
+    elif data == "bulk_jadwal:save":
+        await q.answer()
+        state, ctx = _load_state(uid)
+        if state != "bulk_jadwal_action" or not ctx:
+            await q.edit_message_text("Sesi daftar jadwal sudah kedaluwarsa.")
+            return
+        ctx["action"] = "save"
+        set_state(uid, "bulk_jadwal_owner", ctx)
+        await q.edit_message_text(
+            "Daftar jadwal siap disimpan. Jadwal ini untuk siapa?",
+            reply_markup=pilih_pemilik_jadwal_kb(),
+        )
+    elif data in ("bulk_jadwal:edit", "bulk_jadwal:delete"):
+        await q.answer()
+        clear_state(uid)
+        action = "diedit" if data.endswith(":edit") else "dihapus"
+        await q.edit_message_text(
+            f"Daftar jadwal belum disimpan, jadi belum ada data yang bisa {action}. "
+            "Pilih Simpan semua terlebih dahulu, lalu gunakan menu edit/hapus."
+        )
 
     # ---- Menu Edit ----
     elif data == "menu_edit:jadwal":
@@ -41,6 +64,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         owner_id = int(data.split(":")[2])
         state, ctx = _load_state(uid)
+        if state == "bulk_jadwal_owner" and ctx:
+            with db() as conn:
+                for item in ctx["items"]:
+                    conn.execute("""
+                        INSERT INTO jadwal
+                            (user_id, hari, jam_mulai, jam_selesai, mata_kuliah, dosen, ruangan)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        owner_id,
+                        item["hari"],
+                        item["jam_mulai"],
+                        item["jam_selesai"],
+                        item["matkul"],
+                        item["dosen"] or None,
+                        item["ruangan"] or None,
+                    ))
+            clear_state(uid)
+            await q.edit_message_text(
+                f"✅ {len(ctx['items'])} jadwal berhasil disimpan untuk {nama_user(owner_id)}."
+            )
+            return
+
         if state == "jf_nl_owner" and ctx:
             with db() as conn:
                 conn.execute("""
@@ -195,6 +240,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         hari = int(data.split(":")[1])
         await jadwal.show_delete_jadwal_day(update, context, hari)
+
+    # ---- Hapus semua jadwal pemilik pada hari tertentu ----
+    elif data.startswith("bulk_delete_jadwal:confirm:"):
+        await q.answer("Jadwal dihapus")
+        _, _, _, hari_str, owner_str = data.split(":")
+        hari = int(hari_str)
+        owner_id = int(owner_str)
+        with db() as conn:
+            result = conn.execute(
+                "UPDATE jadwal SET aktif=0 WHERE hari=? AND user_id=? AND aktif=1",
+                (hari, owner_id),
+            )
+        await q.edit_message_text(
+            f"🗑 {result.rowcount} jadwal {nama_user(owner_id)} pada "
+            f"hari {HARI[hari]} berhasil dihapus."
+        )
 
     # ---- Detail jadwal ----
     elif data.startswith("detail_jadwal:"):

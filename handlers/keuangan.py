@@ -9,7 +9,13 @@ from keyboards import nav_keuangan_kb
 
 HARI_NAMA = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 
-async def show_keuangan(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0, edit_mode: bool = False):
+async def show_keuangan(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    offset: int = 0,
+    edit_mode: bool = False,
+    owner_override: int | None = None,
+):
     chat_id = update.effective_chat.id
     current_msg_id = (
         update.callback_query.message.message_id
@@ -45,23 +51,26 @@ async def show_keuangan(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
             SELECT dibayar_oleh, SUM(nominal) as total, COUNT(*) as jumlah
             FROM pengeluaran
             WHERE dihapus=0 AND tanggal BETWEEN ? AND ?
+            AND (? IS NULL OR dibayar_oleh=?)
             GROUP BY dibayar_oleh
-        """, (start_str, end_str)).fetchall()
+        """, (start_str, end_str, owner_override, owner_override)).fetchall()
 
         if offset == 0:
             # Transaksi HARI INI
             transaksi = conn.execute("""
                 SELECT * FROM pengeluaran 
                 WHERE dihapus=0 AND tanggal = ?
+                AND (? IS NULL OR dibayar_oleh=?)
                 ORDER BY id ASC
-            """, (today_str,)).fetchall()
+            """, (today_str, owner_override, owner_override)).fetchall()
         else:
             # Jika melihat minggu lain, ambil transaksi minggu tersebut
             transaksi = conn.execute("""
                 SELECT * FROM pengeluaran 
                 WHERE dihapus=0 AND tanggal BETWEEN ? AND ?
+                AND (? IS NULL OR dibayar_oleh=?)
                 ORDER BY tanggal ASC, id ASC
-            """, (start_str, end_str)).fetchall()
+            """, (start_str, end_str, owner_override, owner_override)).fetchall()
 
     total_a = total_b = jml_a = jml_b = 0
     for r in ringkas:
@@ -76,7 +85,9 @@ async def show_keuangan(update: Update, context: ContextTypes.DEFAULT_TYPE, offs
     tgl_akhir = f"{end_of_week.day} {BULAN[end_of_week.month-1]} {end_of_week.year}"
 
     lines = [
-        f"<b>Keuangan</b>\n{tgl_mulai} - {tgl_akhir}",
+        f"<b>Keuangan"
+        f"{f' {nama_user(owner_override)}' if owner_override is not None else ''}</b>\n"
+        f"{tgl_mulai} - {tgl_akhir}",
         f"Total minggu: <b>{rupiah(total_minggu)}</b>",
         "",
     ]

@@ -26,6 +26,23 @@ def pilih_pemilik_jadwal_kb():
         [InlineKeyboardButton("Batal", callback_data="cancel")],
     ])
 
+def aksi_daftar_jadwal_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Simpan semua", callback_data="bulk_jadwal:save")],
+        [InlineKeyboardButton("✏️ Edit jadwal", callback_data="bulk_jadwal:edit")],
+        [InlineKeyboardButton("🗑 Hapus jadwal", callback_data="bulk_jadwal:delete")],
+        [InlineKeyboardButton("❌ Batal", callback_data="cancel")],
+    ])
+
+def konfirmasi_hapus_semua_jadwal_kb(hari: int, owner_id: int):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "✅ Ya, hapus semua",
+            callback_data=f"bulk_delete_jadwal:confirm:{hari}:{owner_id}",
+        )],
+        [InlineKeyboardButton("❌ Batal", callback_data="cancel")],
+    ])
+
 def pilih_hari_kb(prefix="jf:hari"):
     rows = []
     for i in range(0, 7, 2):

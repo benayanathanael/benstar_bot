@@ -13,10 +13,26 @@ def _jadwal_info(mata_kuliah: str, dosen: str | None = None) -> tuple[str, str |
         return parts[0].strip(), parts[1].strip() or None
     return str(mata_kuliah).strip(), None
 
-async def show_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _render_jadwal(update, context, offset=0, edit_mode=False, is_edit_list=False)
+async def show_hari_ini(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    owner_id: int | None = None,
+):
+    await _render_jadwal(
+        update,
+        context,
+        offset=0,
+        edit_mode=False,
+        is_edit_list=False,
+        owner_override=owner_id,
+    )
 
-async def show_hari(update: Update, context: ContextTypes.DEFAULT_TYPE, hari: int):
+async def show_hari(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    hari: int,
+    owner_id: int | None = None,
+):
     await _render_jadwal(
         update,
         context,
@@ -24,7 +40,50 @@ async def show_hari(update: Update, context: ContextTypes.DEFAULT_TYPE, hari: in
         edit_mode=False,
         is_edit_list=False,
         hari_override=hari,
+        owner_override=owner_id,
     )
+
+async def show_semua_jadwal(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    owner_id: int | None = None,
+):
+    with db() as conn:
+        query = "SELECT * FROM jadwal WHERE aktif=1"
+        params = []
+        if owner_id is not None:
+            query += " AND user_id=?"
+            params.append(owner_id)
+        query += " ORDER BY hari, jam_mulai"
+        rows = conn.execute(query, params).fetchall()
+
+    if not rows:
+        pemilik = f" {nama_user(owner_id)}" if owner_id is not None else ""
+        await update.message.reply_text(
+            f"Belum ada jadwal{pemilik} dari Senin sampai Minggu."
+        )
+        return
+
+    lines = [
+        f"<b>Semua Jadwal{f' {nama_user(owner_id)}' if owner_id is not None else ''}</b>",
+        "",
+    ]
+    for hari in range(7):
+        day_rows = [row for row in rows if row["hari"] == hari]
+        if not day_rows:
+            continue
+        lines.append(f"<b>{HARI[hari]}</b>")
+        for index, row in enumerate(day_rows, start=1):
+            matkul, dosen = _jadwal_info(row["mata_kuliah"], row["dosen"])
+            lines.extend([
+                f"{index}. <code>{row['jam_mulai']}-{row['jam_selesai']}</code>",
+                f"Matkul : {esc(matkul)}",
+                f"Dosen : {esc(dosen) if dosen else '-'}",
+                f"Ruangan : {esc(row['ruangan']) if row['ruangan'] else '-'}",
+                "",
+            ])
+
+    await update.message.reply_text("\n".join(lines).strip(), parse_mode="HTML")
 
 async def show_edit_jadwal_list(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0):
     await _render_jadwal(
@@ -33,6 +92,16 @@ async def show_edit_jadwal_list(update: Update, context: ContextTypes.DEFAULT_TY
         offset=offset,
         edit_mode=bool(update.callback_query),
         is_edit_list=True,
+    )
+
+async def show_edit_jadwal_day(update: Update, context: ContextTypes.DEFAULT_TYPE, hari: int):
+    await _render_jadwal(
+        update,
+        context,
+        offset=0,
+        edit_mode=False,
+        is_edit_list=True,
+        hari_override=hari,
     )
 
 async def show_delete_jadwal_list(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0):
@@ -45,7 +114,12 @@ async def show_delete_jadwal_list(update: Update, context: ContextTypes.DEFAULT_
         delete_mode=True,
     )
 
-async def show_delete_jadwal_day(update: Update, context: ContextTypes.DEFAULT_TYPE, hari: int):
+async def show_delete_jadwal_day(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    hari: int,
+    owner_id: int | None = None,
+):
     await _render_jadwal(
         update,
         context,
@@ -54,6 +128,7 @@ async def show_delete_jadwal_day(update: Update, context: ContextTypes.DEFAULT_T
         is_edit_list=True,
         delete_mode=True,
         hari_override=hari,
+        owner_override=owner_id,
     )
 
 async def _render_jadwal(
@@ -64,14 +139,18 @@ async def _render_jadwal(
     is_edit_list: bool,
     delete_mode: bool = False,
     hari_override: int | None = None,
+    owner_override: int | None = None,
 ):
     hari = hari_override if hari_override is not None else (now_wib().weekday() + offset) % 7
 
     with db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM jadwal WHERE hari=? AND aktif=1 ORDER BY jam_mulai",
-            (hari,)
-        ).fetchall()
+        query = "SELECT * FROM jadwal WHERE hari=? AND aktif=1"
+        params = [hari]
+        if owner_override is not None:
+            query += " AND user_id=?"
+            params.append(owner_override)
+        query += " ORDER BY jam_mulai"
+        rows = conn.execute(query, params).fetchall()
 
     jadwal_a = [r for r in rows if r["user_id"] == USER_A_ID]
     jadwal_b = [r for r in rows if r["user_id"] == USER_B_ID]

@@ -2,7 +2,7 @@ import re
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from config import HARI, nama_user
+from config import HARI, nama_user, USER_A_ID, USER_B_ID, USER_A_NAMA, USER_B_NAMA
 from database import db
 from helpers import valid_jam, valid_nominal, rupiah, esc, tanggal_hari_ini
 from keyboards import (
@@ -116,6 +116,111 @@ def parse_pen_text(text):
         "tanggal": tanggal_hari_ini(),
     }
 
+def parse_jadwal_list_text(text):
+    hari_map = {
+        "senin": 0,
+        "selasa": 1,
+        "rabu": 2,
+        "kamis": 3,
+        "jumat": 4,
+        "sabtu": 5,
+        "minggu": 6,
+    }
+    current_day = None
+    current_schedule = None
+    pending_course = None
+    pending_dosen = ""
+    schedules = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip().strip("-•").strip()
+        if not line:
+            continue
+
+        day_match = re.fullmatch(
+            r'(?:.*?[-:]\s*)?(?:hari\s+)?'
+            r'(senin|selasa|rabu|kamis|jumat|sabtu|minggu)',
+            line,
+            re.IGNORECASE,
+        )
+        if day_match:
+            current_day = hari_map[day_match.group(1).lower()]
+            current_schedule = None
+            pending_course = None
+            pending_dosen = ""
+            continue
+        if (
+            current_day is None
+            and not re.search(r'\d{1,2}[:.]\d{2}', line)
+            and re.search(r'\b(?:senin|selasa|rabu|kamis|jumat|sabtu|minggu)\b', line, re.IGNORECASE)
+        ):
+            day_name = re.search(
+                r'\b(senin|selasa|rabu|kamis|jumat|sabtu|minggu)\b',
+                line,
+                re.IGNORECASE,
+            ).group(1).lower()
+            current_day = hari_map[day_name]
+            continue
+
+        time_match = re.fullmatch(
+            r'(\d{1,2}[:.]\d{2})\s*(?:-|–|—|s/d|sampai)\s*'
+            r'(\d{1,2}[:.]\d{2})(?:\s*\|\s*(.*))?',
+            line,
+            re.IGNORECASE,
+        )
+        if time_match and current_day is not None:
+            if pending_course is not None:
+                current_schedule = {
+                    "hari": current_day,
+                    "jam_mulai": time_match.group(1).replace(".", ":"),
+                    "jam_selesai": time_match.group(2).replace(".", ":"),
+                    "matkul": pending_course,
+                    "dosen": pending_dosen,
+                }
+            else:
+                current_schedule = {
+                    "hari": current_day,
+                    "jam_mulai": time_match.group(1).replace(".", ":"),
+                    "jam_selesai": time_match.group(2).replace(".", ":"),
+                }
+            for key in ("jam_mulai", "jam_selesai"):
+                hour, minute = current_schedule[key].split(":")
+                current_schedule[key] = f"{int(hour):02d}:{minute}"
+            current_schedule["ruangan"] = (time_match.group(3) or "").strip()
+            schedules.append(current_schedule)
+            pending_course = None
+            pending_dosen = ""
+            continue
+
+        if pending_course is not None and re.match(r'^dosen\s*:', line, re.IGNORECASE):
+            pending_dosen = re.sub(r'^dosen\s*:\s*', '', line, flags=re.IGNORECASE).strip()
+            continue
+
+        if current_schedule is not None:
+            if "matkul" in current_schedule:
+                if not current_schedule["ruangan"] and "|" not in line:
+                    current_schedule["ruangan"] = line.strip()
+                    current_schedule = None
+                    continue
+                pending_course = line.lstrip("-• ").strip()
+                pending_dosen = ""
+                current_schedule = None
+                continue
+            parts = re.split(r'\s+[—–-]\s+', line, maxsplit=1)
+            matkul = re.split(r'\s+di\s+jadwal\b', parts[0], maxsplit=1, flags=re.IGNORECASE)[0]
+            current_schedule["matkul"] = matkul.strip()
+            current_schedule["dosen"] = parts[1].strip() if len(parts) == 2 else ""
+            current_schedule["ruangan"] = ""
+            current_schedule = None
+        elif current_day is not None:
+            pending_course = line.lstrip("-• ").strip()
+
+    valid = [
+        item for item in schedules
+        if item.get("matkul")
+    ]
+    return valid or None
+
 async def start_add_jadwal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = q.from_user.id
@@ -123,7 +228,6 @@ async def start_add_jadwal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     await q.edit_message_text(
         "Jadwal ini untuk siapa?",
-        reply_markup=pilih_pemilik_jadwal_kb()
     )
 
 async def start_add_pen(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,8 +237,7 @@ async def start_add_pen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     await q.edit_message_text(
         "Ketik nominal pengeluaran:\n(contoh: <code>25000</code> atau <code>25.000</code>)",
-        parse_mode="HTML",
-        reply_markup=KB_BATAL
+        parse_mode="HTML"
     )
 
 async def _handle_jadwal_form(update, uid, ctx, text):
@@ -145,7 +248,7 @@ async def _handle_jadwal_form(update, uid, ctx, text):
         if not jam:
             await update.message.reply_text(
                 "❌ Format jam salah.\nKetik seperti <code>08:00</code> atau <code>08.00</code>",
-                parse_mode="HTML", reply_markup=KB_BATAL
+                parse_mode="HTML"
             )
             return
         ctx["jam_mulai"] = jam
@@ -153,7 +256,7 @@ async def _handle_jadwal_form(update, uid, ctx, text):
         set_state(uid, "jf", ctx)
         await update.message.reply_text(
             "Jam selesai? (contoh: <code>09:40</code>)", 
-            parse_mode="HTML", reply_markup=KB_BATAL
+            parse_mode="HTML"
         )
 
     elif step == "jam_selesai":
@@ -167,7 +270,7 @@ async def _handle_jadwal_form(update, uid, ctx, text):
         ctx["jam_selesai"] = jam
         ctx["step"] = "mk"
         set_state(uid, "jf", ctx)
-        await update.message.reply_text("Mata kuliah apa?", reply_markup=KB_BATAL)
+        await update.message.reply_text("Mata kuliah apa?")
 
     elif step == "mk":
         if not text:
@@ -177,7 +280,7 @@ async def _handle_jadwal_form(update, uid, ctx, text):
         set_state(uid, "jf", ctx)
         await update.message.reply_text(
             "Nama dosen? (ketik <code>/skip</code> kalau tidak ada)",
-            parse_mode="HTML", reply_markup=KB_BATAL
+            parse_mode="HTML"
         )
 
     elif step == "dosen":
@@ -186,7 +289,7 @@ async def _handle_jadwal_form(update, uid, ctx, text):
         set_state(uid, "jf", ctx)
         await update.message.reply_text(
             "Ruangan? (ketik <code>/skip</code> kalau tidak ada)",
-            parse_mode="HTML", reply_markup=KB_BATAL
+            parse_mode="HTML"
         )
 
     elif step == "ruangan":
@@ -207,7 +310,6 @@ async def _handle_jadwal_form(update, uid, ctx, text):
             f"{HARI[hari]} {ctx['jam_mulai']}–{ctx['jam_selesai']}"
             + (f" di {esc(ruangan)}" if ruangan else ""),
             parse_mode="HTML",
-            reply_markup=menu_utama()
         )
 
 async def _handle_pen_form(update, uid, ctx, text):
@@ -218,7 +320,7 @@ async def _handle_pen_form(update, uid, ctx, text):
         if not n:
             await update.message.reply_text(
                 "❌ Nominal tidak valid.\nKetik angka saja, contoh: <code>45000</code>", 
-                parse_mode="HTML", reply_markup=KB_BATAL
+                parse_mode="HTML"
             )
             return
         ctx["nominal"] = n
@@ -226,7 +328,7 @@ async def _handle_pen_form(update, uid, ctx, text):
         set_state(uid, "pf", ctx)
         await update.message.reply_text(
             "Keterangan pengeluaran? (contoh: <i>makan siang</i>)", 
-            parse_mode="HTML", reply_markup=KB_BATAL
+            parse_mode="HTML"
         )
 
     elif step == "keterangan":
@@ -238,7 +340,6 @@ async def _handle_pen_form(update, uid, ctx, text):
         await update.message.reply_text(
             f"Nominal: <b>{rupiah(ctx['nominal'])}</b>\nKeterangan: {esc(text)}\n\nSiapa yang bayar?",
             parse_mode="HTML",
-            reply_markup=pilih_bayar_kb()
         )
 
 async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, state: str, ctx: dict):
@@ -248,7 +349,62 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, state:
     if ctx is None:
         ctx = {}
 
-    if state == "jf":
+    if state == "jf_nl_owner":
+        owner_id = _owner_id_from_text(text, uid)
+        if owner_id is None:
+            await update.message.reply_text("Ketik pemilik jadwal: Benaya atau Agnes.")
+            return
+        with db() as conn:
+            conn.execute("""
+                INSERT INTO jadwal
+                    (user_id, hari, jam_mulai, jam_selesai, mata_kuliah, ruangan)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                owner_id, ctx["hari"], ctx["jam_mulai"], ctx["jam_selesai"],
+                ctx["matkul"], ctx["ruangan"],
+            ))
+        clear_state(uid)
+        await update.message.reply_text(
+            f"Jadwal {ctx['matkul']} tersimpan untuk {nama_user(owner_id)}."
+        )
+    elif state == "jf_nl_hari":
+        hari = _day_from_text(text)
+        if hari is None:
+            await update.message.reply_text("Ketik nama hari: Senin sampai Minggu.")
+            return
+        ctx["hari"] = hari
+        set_state(uid, "jf_nl_owner", ctx)
+        await update.message.reply_text("Ketik pemilik jadwal: Benaya atau Agnes.")
+    elif state == "bulk_jadwal_action":
+        if text.lower() in ("batal", "/cancel"):
+            clear_state(uid)
+            await update.message.reply_text("Dibatalkan.")
+        elif "simpan" in text.lower():
+            ctx["action"] = "save"
+            set_state(uid, "bulk_jadwal_owner", ctx)
+            await update.message.reply_text("Ketik pemilik jadwal: Benaya atau Agnes.")
+        else:
+            await update.message.reply_text("Ketik 'simpan semua' atau 'batal'.")
+    elif state == "bulk_jadwal_owner":
+        owner_id = _owner_id_from_text(text, uid)
+        if owner_id is None:
+            await update.message.reply_text("Ketik pemilik jadwal: Benaya atau Agnes.")
+            return
+        with db() as conn:
+            for item in ctx["items"]:
+                conn.execute("""
+                    INSERT INTO jadwal
+                        (user_id, hari, jam_mulai, jam_selesai, mata_kuliah, dosen, ruangan)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    owner_id, item["hari"], item["jam_mulai"], item["jam_selesai"],
+                    item["matkul"], item["dosen"] or None, item["ruangan"] or None,
+                ))
+        clear_state(uid)
+        await update.message.reply_text(
+            f"{len(ctx['items'])} jadwal tersimpan untuk {nama_user(owner_id)}."
+        )
+    elif state == "jf":
         await _handle_jadwal_form(update, uid, ctx, text)
     elif state == "pf":
         await _handle_pen_form(update, uid, ctx, text)
@@ -340,11 +496,83 @@ async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, state:
         else:
             await update.message.reply_text("✅ Pengeluaran diperbarui.", reply_markup=menu_utama())
 
+    elif state == "ep_text_wait":
+        pid = ctx.get("pen_id")
+        lowered = text.lower()
+        nominal_match = re.search(
+            r"\b(?:nominal|jumlah|harga|jadi)\s*[:=]?\s*"
+            r"(\d{1,3}(?:[.,]\d{3})+|\d+)(?:\s*(rb|ribu|k))?\b",
+            lowered,
+            re.IGNORECASE,
+        )
+        if nominal_match:
+            value = int(nominal_match.group(1).replace(".", "").replace(",", ""))
+            if nominal_match.group(2):
+                value *= 1000
+            if value <= 0 or value > 1_000_000_000:
+                await update.message.reply_text(
+                    "Nominal harus antara Rp1 dan Rp1.000.000.000."
+                )
+                return
+            field = "nominal"
+        else:
+            description_match = re.search(
+                r"\b(?:keterangan|ket|deskripsi)\s*[:=]?\s*(.+)$",
+                text,
+                re.IGNORECASE,
+            )
+            if not description_match:
+                await update.message.reply_text(
+                    "Ketik perubahan seperti 'nominal 50000' atau "
+                    "'keterangan makan siang'."
+                )
+                return
+            value = description_match.group(1).strip(" :-")
+            if not value:
+                await update.message.reply_text("Keterangan tidak boleh kosong.")
+                return
+            field = "keterangan"
+        with db() as conn:
+            conn.execute(
+                f"UPDATE pengeluaran SET {field}=? WHERE id=? AND dihapus=0",
+                (value, pid),
+            )
+        clear_state(uid)
+        await update.message.reply_text("✅ Pengeluaran diperbarui.")
+
     elif state in ("ej_hari_wait", "ep_bayar_wait"):
         await update.message.reply_text(
             "Silakan pilih opsi pada tombol pesan sebelumnya, atau kirim /cancel untuk batal.",
             reply_markup=KB_BATAL
         )
+
+def _day_from_text(text: str) -> int | None:
+    lowered = text.lower()
+    for index, name in enumerate(HARI):
+        if name.lower() in lowered:
+            return index
+    return None
+
+def _owner_id_from_text(text: str, current_user_id: int) -> int | None:
+    lowered = text.lower()
+    self_patterns = (
+        r"\baku\b",
+        r"\bsaya\b",
+        r"\bgue\b",
+        r"\bgw\b",
+        r"\b(?:jadwal|kelas|kuliah|matkul|transaksi|pengeluaran|data|catatan|setting|pengaturan)(?:ku|saya)\b",
+        r"\b(?:senin|selasa|rabu|kamis|jumat|sabtu|minggu)(?:ku|saya)\b",
+        r"\bhari\s+(?:senin|selasa|rabu|kamis|jumat|sabtu|minggu)\s+(?:aku|saya)\b",
+        r"\b(?:punyaku|milikku)\b",
+        r"\b(?:milik|punya)\s+(?:aku|saya)\b",
+    )
+    if any(re.search(pattern, lowered) for pattern in self_patterns):
+        return current_user_id
+    if any(alias in lowered for alias in ("benaya", "imut")) or USER_A_NAMA.lower() in lowered:
+        return USER_A_ID
+    if any(alias in lowered for alias in ("agnes", "seng", "agnez")) or USER_B_NAMA.lower() in lowered:
+        return USER_B_ID
+    return None
 
 async def start_add_jadwal_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(update.effective_user.id, "jf", {"step": "hari", "mode": "add"})
