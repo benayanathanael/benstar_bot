@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import re
 from datetime import timedelta
 
@@ -79,16 +81,6 @@ def _expense_rows(conn, text: str, owner_id: int | None):
         """,
         params,
     ).fetchall()
-
-def _expense_description(parsed: dict, text: str) -> str:
-    description = parsed["keterangan"]
-    description = re.sub(
-        r"\b(?:tambahkan|tambah|benaya|imut|agnes|agnez|seng|aku|saya|gue|gw|hari\s+ini)\b",
-        " ",
-        description,
-        flags=re.IGNORECASE,
-    )
-    return re.sub(r"\s+", " ", description).strip(" :-") or "Pengeluaran"
 
 def _expense_field_update(text: str):
     nominal_match = re.search(
@@ -410,30 +402,68 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # 3b. INTENT: PENGELUARAN BERBASIS TEKS
-    if _expense_has_keyword(text_lower):
-        if any(k in text_lower for k in ["tambah", "tambahkan", "catat", "catet", "beli", "bayar", "input"]):
-            parsed = add.parse_pen_text(text)
-            if parsed:
-                owner_id = _owner_id_from_text(text_lower, uid) or uid
-                parsed["keterangan"] = _expense_description(parsed, text)
-                with db() as conn:
+    has_expense_word = any(
+        keyword in text_lower
+        for keyword in ("jajan", "beli", "makan", "bayar", "habis", "lupa")
+    )
+    mentions_schedule = any(
+        keyword in text_lower
+        for keyword in ("jadwal", "kuliah", "kelas", "matkul", "mata kuliah")
+    )
+    if _expense_has_keyword(text_lower) or (has_expense_word and not mentions_schedule):
+        if await _handle_expense_command(update, context, text_lower, uid):
+            return
+
+        await update.message.reply_text("🧠 Menganalisis teks...")
+        try:
+            from services.ai_parser import parse_expense_with_ai
+            expenses = await asyncio.to_thread(parse_expense_with_ai, text)
+        except Exception:
+            logging.exception("Gagal menganalisis pengeluaran teks")
+            await update.message.reply_text(
+                "❌ Gagal menganalisis pengeluaran. Periksa konfigurasi AI lalu coba lagi."
+            )
+            return
+
+        if not expenses:
+            await add.start_add_pen_msg(update, context)
+            return
+
+        owner_id = _owner_id_from_text(text_lower, uid) or uid
+        try:
+            lines = []
+            with db() as conn:
+                for expense in expenses:
                     conn.execute(
                         """
                         INSERT INTO pengeluaran
                             (nominal, keterangan, dibayar_oleh, tanggal)
                         VALUES (?, ?, ?, ?)
                         """,
-                        (parsed["nominal"], parsed["keterangan"], owner_id, parsed["tanggal"]),
+                        (
+                            expense["nominal"],
+                            expense["keterangan"],
+                            owner_id,
+                            expense["tanggal"],
+                        ),
                     )
-                await update.message.reply_text(
-                    f"✅ Pengeluaran tersimpan untuk {nama_user(owner_id)}:\n"
-                    f"{parsed['keterangan']} — {rupiah(parsed['nominal'])}"
-                )
-            else:
-                await add.start_add_pen_msg(update, context)
+                    lines.append(
+                        f"• {esc(expense['keterangan'].title())} "
+                        f"({rupiah(expense['nominal'])}) - {expense['tanggal']}"
+                    )
+        except Exception:
+            logging.exception("Gagal menyimpan pengeluaran teks")
+            await update.message.reply_text(
+                "❌ Pengeluaran gagal disimpan. Silakan coba lagi."
+            )
             return
-        if await _handle_expense_command(update, context, text_lower, uid):
-            return
+        await update.message.reply_text(
+            f"✅ <b>Protokol Pencatatan Selesai.</b>\n\n"
+            f"Saya mencatat {len(expenses)} transaksi untuk "
+            f"{esc(nama_user(owner_id))}:\n{chr(10).join(lines)}",
+            parse_mode="HTML",
+        )
+        return
 
     if parsed_schedule_list or any(k in text_lower for k in ["nambah", "tambah", "tambahin", "bikin", "buat", "catat", "input", "lupa", "catet"]):
         if parsed_schedule_list or any(k in text_lower for k in [
@@ -511,24 +541,52 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await add.start_add_jadwal_msg(update, context)
             return
         elif any(k in text_lower for k in ["uang", "pengeluaran", "beli", "bayar", "duit", "jajan", "makan", "habis"]):
-            parsed = add.parse_pen_text(text)
-            if parsed:
-                with db() as conn:
-                    conn.execute("""
-                        INSERT INTO pengeluaran (nominal, keterangan, dibayar_oleh, tanggal)
-                        VALUES (?, ?, ?, ?)
-                    """, (parsed["nominal"], parsed["keterangan"], uid, parsed["tanggal"]))
-
+            await update.message.reply_text("🧠 Menganalisis teks...")
+            try:
+                from services.ai_parser import parse_expense_with_ai
+                expenses = await asyncio.to_thread(parse_expense_with_ai, text)
+            except Exception:
+                logging.exception("Gagal menganalisis pengeluaran teks")
                 await update.message.reply_text(
-                    f"✅ <b>Pengeluaran Otomatis Tersimpan!</b>\n\n"
-                    f"🧾 Keterangan: <b>{parsed['keterangan'].title()}</b>\n"
-                    f"💰 Nominal: {rupiah(parsed['nominal'])}\n"
-                    f"📅 Tanggal: {parsed['tanggal']}\n"
-                    f"👤 Pembayar: {nama_user(uid)}",
-                    parse_mode="HTML",
+                    "❌ Gagal menganalisis pengeluaran. Periksa konfigurasi AI lalu coba lagi."
                 )
-            else:
+                return
+
+            if not expenses:
                 await add.start_add_pen_msg(update, context)
+                return
+
+            try:
+                lines = []
+                with db() as conn:
+                    for expense in expenses:
+                        conn.execute(
+                            """
+                            INSERT INTO pengeluaran (nominal, keterangan, dibayar_oleh, tanggal)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (
+                                expense["nominal"],
+                                expense["keterangan"],
+                                uid,
+                                expense["tanggal"],
+                            ),
+                        )
+                        lines.append(
+                            f"• {esc(expense['keterangan'].title())} "
+                            f"({rupiah(expense['nominal'])}) - {expense['tanggal']}"
+                        )
+            except Exception:
+                logging.exception("Gagal menyimpan pengeluaran teks")
+                await update.message.reply_text(
+                    "❌ Pengeluaran gagal disimpan. Silakan coba lagi."
+                )
+                return
+            await update.message.reply_text(
+                f"✅ <b>Protokol Pencatatan Selesai.</b>\n\n"
+                f"Saya mencatat {len(expenses)} transaksi:\n{chr(10).join(lines)}",
+                parse_mode="HTML",
+            )
             return
         else:
             await update.message.reply_text(

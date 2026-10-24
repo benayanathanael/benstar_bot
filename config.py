@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN    = os.getenv("BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 USER_A_ID    = int(os.getenv("USER_A_ID", "0"))
 USER_B_ID    = int(os.getenv("USER_B_ID", "0"))
 USER_A_NAMA  = os.getenv("USER_A_NAMA", "A")

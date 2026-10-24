@@ -1,6 +1,8 @@
 import os
 import logging
 from html import escape
+import asyncio
+import tempfile
 
 # Bersihkan sisa environment variable proxy agar tidak mengganggu koneksi
 for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
@@ -9,8 +11,8 @@ for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.request import HTTPXRequest
-from config import BOT_TOKEN
-from database import init_db
+from config import BOT_TOKEN, is_valid_user
+from database import db, init_db
 from handlers import start, menu, callback, jadwal, keuangan, add, settings
 from services.scheduler import start_scheduler
 
@@ -23,9 +25,6 @@ async def _post_init(app):
     start_scheduler(app.bot)
 
 def main():
-    import random
-    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-
     init_db()
     request = HTTPXRequest(httpx_kwargs={"trust_env": False})
     app = (
@@ -43,28 +42,80 @@ def main():
     app.add_handler(CommandHandler("jadwal", jadwal.show_hari_ini))
     app.add_handler(CommandHandler("uang", keuangan.show_keuangan))
     app.add_handler(CommandHandler("tambah", add.start_add_pen_msg))
+    app.add_handler(CommandHandler("jarvis", jarvis_cmd))
     app.add_handler(CommandHandler("setting", settings.show_settings))
     app.add_handler(CommandHandler("cancel", _cancel))
     app.add_handler(CallbackQueryHandler(callback.handle_callback))
 
     async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from services.audio_parser import transcribe_voice
+        from services.ai_parser import parse_expense_with_ai
+        from helpers import rupiah
+
+        if not is_valid_user(update.effective_user.id):
+            await update.message.reply_text("🚫 Bot private.")
+            return
+
         user_name = escape(update.effective_user.first_name)
-        responses = [
-            f"🎙️ <b>Sistem mendeteksi transmisi audio dari Anda, {user_name}.</b>\n\nMaaf, modul <i>Natural Language Processing</i> saat ini belum dikalibrasi. Namun, saya siap menerima pembaruan. Haruskah saya menarik data terbaru dari server pusat untuk mengoptimalkan performa saya?",
-            f"🤖 <b>Selamat datang, {user_name}.</b>\n\nSaya mendengar suara Anda, namun sensor audio saya belum bisa menerjemahkan bahasa manusia. Jika Anda baru saja menyelesaikan <i>coding</i> di <i>workstation</i>, izinkan saya melakukan <i>Protocol Sync</i> agar performa saya meningkat pesat.",
-            f"📻 <b>Diagnostik audio selesai, {user_name}.</b>\n\nKoneksi stabil. Saya merekomendasikan inisialisasi pembaruan sistem agar saya dapat melayani Anda dengan lebih baik. Silakan konfirmasi perintah Anda.",
-            f"🎵 <b>Pesan suara diterima, {user_name}.</b>\n\nSayangnya kapasitas kognitif saya belum di-upgrade untuk memahami instruksi verbal. Izinkan saya mengunduh parameter terbaru dari repositori utama sekarang, {user_name}?",
-        ]
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "⚙️ Eksekusi Protocol Sync",
-                callback_data="trigger_sync_btn",
+        msg = await update.message.reply_text(
+            f"🎙️ Menerima transmisi audio, {user_name}. Memproses..."
+        )
+        try:
+            transcript = await transcribe_voice(context, update.message.voice)
+            if not transcript:
+                await msg.edit_text("❌ Maaf, sensor audio tidak menemukan ucapan yang dapat diproses.")
+                return
+
+            await msg.edit_text(
+                f"📝 Mendengar: <i>\"{escape(transcript)}\"</i>\n\n"
+                "Menganalisis parameter keuangan...",
+                parse_mode="HTML",
             )
-        ]])
-        await update.message.reply_text(
-            random.choice(responses),
+            expenses = await asyncio.to_thread(parse_expense_with_ai, transcript)
+        except Exception:
+            logging.exception("Gagal memproses voice note")
+            await msg.edit_text("❌ Gagal memproses voice note. Periksa konfigurasi AI lalu coba lagi.")
+            return
+
+        if not expenses:
+            await msg.edit_text(
+                f"🤖 Suara terdeteksi: <i>\"{escape(transcript)}\"</i>\n\n"
+                "Namun saya tidak menemukan nominal pengeluaran yang valid.",
+                parse_mode="HTML",
+            )
+            return
+
+        try:
+            berhasil = []
+            with db() as conn:
+                for expense in expenses:
+                    conn.execute(
+                        """
+                        INSERT INTO pengeluaran (nominal, keterangan, dibayar_oleh, tanggal)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            expense["nominal"],
+                            expense["keterangan"],
+                            update.effective_user.id,
+                            expense["tanggal"],
+                        ),
+                    )
+                    berhasil.append(
+                        f"• {escape(expense['keterangan'].title())} "
+                        f"({rupiah(expense['nominal'])}) - {expense['tanggal']}"
+                    )
+        except Exception:
+            logging.exception("Gagal menyimpan pengeluaran dari voice note")
+            await msg.edit_text("❌ Pengeluaran gagal disimpan. Silakan coba lagi.")
+            return
+
+        await msg.edit_text(
+            f"✅ <b>Protokol Pencatatan Selesai, {user_name}.</b>\n\n"
+            f"Saya telah mencatat {len(expenses)} transaksi:\n"
+            f"{chr(10).join(berhasil)}\n\n"
+            "Semua data telah diamankan ke dalam database.",
             parse_mode="HTML",
-            reply_markup=keyboard,
         )
 
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
@@ -72,6 +123,40 @@ def main():
 
     logging.info("🚀 Benstar running...")
     app.run_polling()
+
+async def jarvis_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_valid_user(update.effective_user.id):
+        await update.message.reply_text("🚫 Bot private.")
+        return
+
+    user_name = update.effective_user.first_name
+    text = " ".join(context.args)
+    if not text:
+        text = (
+            f"Selamat datang kembali, {user_name}. "
+            "Sistem Benstar siap menerima perintah Anda."
+        )
+
+    message = await update.message.reply_text("🎙️ Menyiapkan pita suara...")
+    from services.tts_service import generate_voice
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="benstar_tts_") as temp_dir:
+            audio_path = os.path.join(temp_dir, "suara_jarvis.ogg")
+            voice_path = await generate_voice(text, audio_path)
+            if voice_path is None or not os.path.exists(voice_path):
+                await message.edit_text("❌ Maaf Tuan, pita suara saya sedang bermasalah.")
+                return
+
+            with open(voice_path, "rb") as voice_file:
+                await update.message.reply_voice(voice=voice_file)
+            try:
+                await message.delete()
+            except Exception:
+                logging.exception("Gagal menghapus status persiapan voice note")
+    except Exception:
+        logging.exception("Gagal mengirim voice note J.A.R.V.I.S.")
+        await message.edit_text("❌ Maaf Tuan, pita suara saya sedang bermasalah.")
 
 async def _cancel(update, context):
     from states import clear_state
