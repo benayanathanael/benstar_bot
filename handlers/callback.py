@@ -15,8 +15,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
     data = q.data
 
+    if data == "trigger_sync_btn":
+        await q.answer()
+        from handlers import settings
+        await settings.trigger_sync(update, context)
+
     # ---- Tambah ----
-    if data == "add:jadwal":
+    elif data == "add:jadwal":
         await add.start_add_jadwal(update, context)
     elif data == "add:pen":
         await add.start_add_pen(update, context)

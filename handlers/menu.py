@@ -206,6 +206,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text.strip()
     text_lower = text.lower()
+
+    # 0. INTENT: UPDATE BOT (Natural Language)
+    if any(
+        keyword in text_lower
+        for keyword in ("baruin data", "update bot", "tarik kode", "sync", "pull", "restart")
+    ):
+        await settings.trigger_sync(update, context)
+        return
+
     parsed_schedule_list = add.parse_jadwal_list_text(text)
     explicit_bulk_add = (
         bool(parsed_schedule_list)

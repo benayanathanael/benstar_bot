@@ -1,6 +1,4 @@
 import os
-import sys
-import subprocess
 import logging
 
 # Bersihkan sisa environment variable proxy agar tidak mengganggu koneksi
@@ -35,7 +33,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start.start_cmd))
-    app.add_handler(CommandHandler("sync", sync_cmd))
+    app.add_handler(CommandHandler("sync", settings.trigger_sync))
     app.add_handler(CommandHandler("menu", start.start_cmd))
     # Slash Commands (Natural Language)
     app.add_handler(CommandHandler("jadwal", jadwal.show_hari_ini))
@@ -44,27 +42,26 @@ def main():
     app.add_handler(CommandHandler("setting", settings.show_settings))
     app.add_handler(CommandHandler("cancel", _cancel))
     app.add_handler(CallbackQueryHandler(callback.handle_callback))
+
+    async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "🚀 Ya, Sync Bot!",
+                callback_data="trigger_sync_btn",
+            )
+        ]])
+        await update.message.reply_text(
+            "🎙️ Voice note masuk!\n\nMau tarik kode terbaru dari GitHub sekarang?",
+            reply_markup=keyboard,
+        )
+
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu.handle_text))
 
     logging.info("🚀 Benstar running...")
     app.run_polling()
-
-async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from config import USER_A_ID, USER_B_ID
-    uid = update.effective_user.id
-    if uid not in (USER_A_ID, USER_B_ID):
-        return
-
-    msg = await update.message.reply_text("🔄 Menarik update terbaru dari GitHub...")
-
-    try:
-        subprocess.run(["git", "fetch", "--all"], check=True, capture_output=True)
-        subprocess.run(["git", "reset", "--hard", "origin/main"], check=True, capture_output=True)
-
-        await msg.edit_text("✅ Update berhasil! Bot sedang restart...")
-        os._exit(0)
-    except Exception as e:
-        await msg.edit_text(f"❌ Gagal update: {e}")
 
 async def _cancel(update, context):
     from states import clear_state
