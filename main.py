@@ -1,11 +1,14 @@
 import os
+import sys
+import subprocess
 import logging
 
 # Bersihkan sisa environment variable proxy agar tidak mengganggu koneksi
 for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
     os.environ.pop(key, None)
 
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.request import HTTPXRequest
 from config import BOT_TOKEN
 from database import init_db
@@ -32,6 +35,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start.start_cmd))
+    app.add_handler(CommandHandler("sync", sync_cmd))
     app.add_handler(CommandHandler("menu", start.start_cmd))
     # Slash Commands (Natural Language)
     app.add_handler(CommandHandler("jadwal", jadwal.show_hari_ini))
@@ -44,6 +48,23 @@ def main():
 
     logging.info("🚀 Benstar running...")
     app.run_polling()
+
+async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from config import USER_A_ID, USER_B_ID
+    uid = update.effective_user.id
+    if uid not in (USER_A_ID, USER_B_ID):
+        return
+
+    msg = await update.message.reply_text("🔄 Menarik update terbaru dari GitHub...")
+
+    try:
+        subprocess.run(["git", "fetch", "--all"], check=True, capture_output=True)
+        subprocess.run(["git", "reset", "--hard", "origin/main"], check=True, capture_output=True)
+
+        await msg.edit_text("✅ Update berhasil! Bot sedang restart...")
+        os._exit(0)
+    except Exception as e:
+        await msg.edit_text(f"❌ Gagal update: {e}")
 
 async def _cancel(update, context):
     from states import clear_state
