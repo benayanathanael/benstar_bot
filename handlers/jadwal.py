@@ -27,6 +27,21 @@ async def show_hari_ini(
         owner_override=owner_id,
     )
 
+async def show_jadwal_by_hari(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    target_hari: int,
+):
+    today_idx = now_wib().weekday()
+    offset = target_hari - today_idx
+    await _render_jadwal(
+        update,
+        context,
+        offset=offset,
+        edit_mode=False,
+        is_edit_list=False,
+    )
+
 async def show_hari(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,

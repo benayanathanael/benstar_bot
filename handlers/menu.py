@@ -553,23 +553,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # 5. INTENT: LIHAT JADWAL
+    # 5. INTENT: LIHAT JADWAL (Dengan deteksi hari)
     elif any(k in text_lower for k in [
         "lihat", "cek", "buka", "tampil", "jadwal", "kelas", "kuliah",
         "matkul", "mata kuliah", "pelajaran", "schedule", "class",
     ]):
-        hari = next(
-            (index for index, nama in enumerate(HARI) if nama.lower() in text_lower),
+        hari_map = {
+            "senin": 0,
+            "selasa": 1,
+            "rabu": 2,
+            "kamis": 3,
+            "jumat": 4,
+            "sabtu": 5,
+            "minggu": 6,
+        }
+        target_hari = next(
+            (hari_idx for hari_name, hari_idx in hari_map.items() if hari_name in text_lower),
             -1,
         )
         owner_id = _owner_id_from_text(text_lower, uid)
 
         if any(k in text_lower for k in ["semua", "seluruh", "minggu ini", "sampai terakhir"]):
             await jadwal.show_semua_jadwal(update, context, owner_id=owner_id)
-        elif hari == -1:
-            await jadwal.show_hari_ini(update, context, owner_id=owner_id)
+        elif target_hari != -1:
+            await jadwal.show_jadwal_by_hari(update, context, target_hari)
         else:
-            await jadwal.show_hari(update, context, hari, owner_id=owner_id)
+            await jadwal.show_hari_ini(update, context, owner_id=owner_id)
         return
 
     # 6. INTENT: LIHAT KEUANGAN
