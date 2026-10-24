@@ -1,5 +1,6 @@
 import os
 import logging
+from html import escape
 
 # Bersihkan sisa environment variable proxy agar tidak mengganggu koneksi
 for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
@@ -47,21 +48,22 @@ def main():
     app.add_handler(CallbackQueryHandler(callback.handle_callback))
 
     async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_name = escape(update.effective_user.first_name)
         responses = [
-            "🎙️ *Waduh, pesan suaranya masuk!* Tapi maaf ya, aku bot gratisan jadi belum bisa bales pakai suara. 😂\n\nMau aku tarik kode terbaru dari GitHub sekarang?",
-            "🎵 *Suara kamu merdu banget!* Sayangnya aku nggak punya telinga buat dengerin. T_T\n\nTapi kalau kamu baru aja selesai ngoding di laptop, pencet tombol di bawah biar aku *update*!",
-            "📻 *Sinyal diterima!* Aku udah siap tempur nih. Kamu mau *push* kode baru atau cuma kangen manggil aku?\n\nKalau mau update, klik tombol ini:",
-            "🤖 *Bleep bloop!* Aku denger suara kamu, tapi otakku belum bisa nerjemahin bahasa manusia (karena nggak pakai AI berbayar).\n\nYuk, pencet tombol di bawah kalau mau aku *refresh* ke versi paling baru!",
+            f"🎙️ <b>Sistem mendeteksi transmisi audio dari Anda, {user_name}.</b>\n\nMaaf, modul <i>Natural Language Processing</i> saat ini belum dikalibrasi. Namun, saya siap menerima pembaruan. Haruskah saya menarik data terbaru dari server pusat untuk mengoptimalkan performa saya?",
+            f"🤖 <b>Selamat datang, {user_name}.</b>\n\nSaya mendengar suara Anda, namun sensor audio saya belum bisa menerjemahkan bahasa manusia. Jika Anda baru saja menyelesaikan <i>coding</i> di <i>workstation</i>, izinkan saya melakukan <i>Protocol Sync</i> agar performa saya meningkat pesat.",
+            f"📻 <b>Diagnostik audio selesai, {user_name}.</b>\n\nKoneksi stabil. Saya merekomendasikan inisialisasi pembaruan sistem agar saya dapat melayani Anda dengan lebih baik. Silakan konfirmasi perintah Anda.",
+            f"🎵 <b>Pesan suara diterima, {user_name}.</b>\n\nSayangnya kapasitas kognitif saya belum di-upgrade untuk memahami instruksi verbal. Izinkan saya mengunduh parameter terbaru dari repositori utama sekarang, {user_name}?",
         ]
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton(
-                "🚀 Ya, Tarik Kode Terbaru!",
+                "⚙️ Eksekusi Protocol Sync",
                 callback_data="trigger_sync_btn",
             )
         ]])
         await update.message.reply_text(
             random.choice(responses),
-            parse_mode="Markdown",
+            parse_mode="HTML",
             reply_markup=keyboard,
         )
 
