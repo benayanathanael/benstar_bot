@@ -22,6 +22,9 @@ async def _post_init(app):
     start_scheduler(app.bot)
 
 def main():
+    import random
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
     init_db()
     request = HTTPXRequest(httpx_kwargs={"trust_env": False})
     app = (
@@ -44,16 +47,21 @@ def main():
     app.add_handler(CallbackQueryHandler(callback.handle_callback))
 
     async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-
+        responses = [
+            "🎙️ *Waduh, pesan suaranya masuk!* Tapi maaf ya, aku bot gratisan jadi belum bisa bales pakai suara. 😂\n\nMau aku tarik kode terbaru dari GitHub sekarang?",
+            "🎵 *Suara kamu merdu banget!* Sayangnya aku nggak punya telinga buat dengerin. T_T\n\nTapi kalau kamu baru aja selesai ngoding di laptop, pencet tombol di bawah biar aku *update*!",
+            "📻 *Sinyal diterima!* Aku udah siap tempur nih. Kamu mau *push* kode baru atau cuma kangen manggil aku?\n\nKalau mau update, klik tombol ini:",
+            "🤖 *Bleep bloop!* Aku denger suara kamu, tapi otakku belum bisa nerjemahin bahasa manusia (karena nggak pakai AI berbayar).\n\nYuk, pencet tombol di bawah kalau mau aku *refresh* ke versi paling baru!",
+        ]
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton(
-                "🚀 Ya, Sync Bot!",
+                "🚀 Ya, Tarik Kode Terbaru!",
                 callback_data="trigger_sync_btn",
             )
         ]])
         await update.message.reply_text(
-            "🎙️ Voice note masuk!\n\nMau tarik kode terbaru dari GitHub sekarang?",
+            random.choice(responses),
+            parse_mode="Markdown",
             reply_markup=keyboard,
         )
 

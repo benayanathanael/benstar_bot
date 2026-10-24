@@ -210,7 +210,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 0. INTENT: UPDATE BOT (Natural Language)
     if any(
         keyword in text_lower
-        for keyword in ("baruin data", "update bot", "tarik kode", "sync", "pull", "restart")
+        for keyword in (
+            "baruin", "update bot", "tarik kode", "sync", "pull", "restart",
+            "refresh", "ngoding", "update", "tarik",
+        )
     ):
         await settings.trigger_sync(update, context)
         return
