@@ -34,7 +34,7 @@ def parse_expense_with_ai(text: str) -> list[dict]:
                 "content": json.dumps(text, ensure_ascii=False),
             },
         ],
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
         temperature=0.1,
         response_format={"type": "json_object"},
     )
