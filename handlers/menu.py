@@ -185,12 +185,9 @@ async def _handle_expense_command(update, context, text_lower, uid):
         )
         return True
 
-    if any(word in text_lower for word in ("lihat", "cek", "tampil", "buka", "show")):
-        await keuangan.show_keuangan(update, context, owner_override=owner_id)
-        return True
     return False
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _handle_legacy_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_valid_user(uid):
         await update.message.reply_text("🚫 Bot private.")
@@ -686,3 +683,158 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Atau pakai menu di bawah ya 👇",
             parse_mode="HTML",
         )
+
+
+async def _handle_ai_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    from services.ai_parser import parse_natural_language
+
+    try:
+        result = await asyncio.to_thread(parse_natural_language, text)
+    except Exception:
+        logging.exception("Gagal memahami pesan bebas")
+        await update.message.reply_text(
+            "❌ Maaf Tuan, pesan belum dapat dipahami. Silakan coba lagi."
+        )
+        return
+
+    intent = result["intent"]
+    data = result["data"]
+    reply_text = result["reply_text"]
+    if result["kekurangan"]:
+        await update.message.reply_text(reply_text)
+        return
+
+    try:
+        if intent == "tambah_jadwal":
+            schedules = data["jadwal"]
+            owner_id = _owner_id_from_text(str(data.get("pemilik", "Saya")), update.effective_user.id)
+            if owner_id is None:
+                await update.message.reply_text("Tuan, jadwal ini untuk siapa?")
+                return
+            with db() as conn:
+                for schedule in schedules:
+                    conn.execute(
+                        """
+                        INSERT INTO jadwal
+                            (user_id, hari, jam_mulai, jam_selesai, mata_kuliah, dosen, ruangan)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            owner_id,
+                            schedule["hari"],
+                            schedule["jam_mulai"],
+                            schedule["jam_selesai"],
+                            schedule["mata_kuliah"],
+                            schedule.get("dosen") or None,
+                            schedule.get("ruangan") or None,
+                        ),
+                    )
+            await update.message.reply_text(reply_text)
+        elif intent == "tambah_pengeluaran":
+            payer = str(data.get("dibayar_oleh", "Saya"))
+            payer_id = _owner_id_from_text(payer, update.effective_user.id) or update.effective_user.id
+            with db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO pengeluaran (nominal, keterangan, dibayar_oleh, tanggal)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        data["nominal"],
+                        data["keterangan"],
+                        payer_id,
+                        data["tanggal"],
+                    ),
+                )
+            await update.message.reply_text(reply_text)
+        elif intent == "lihat_jadwal":
+            await update.message.reply_text(reply_text)
+            period = data.get("periode", "hari")
+            if period in ("minggu", "semua"):
+                await jadwal.show_semua_jadwal(update, context)
+            else:
+                day = data.get("hari", now_wib().weekday())
+                await jadwal.show_jadwal_by_hari(update, context, day)
+        elif intent == "lihat_keuangan":
+            await update.message.reply_text(reply_text)
+            await keuangan.show_keuangan(
+                update,
+                context,
+                period=data.get("periode", "minggu_ini"),
+            )
+        else:
+            await update.message.reply_text(reply_text)
+    except Exception:
+        logging.exception("Gagal menjalankan intent %s", intent)
+        await update.message.reply_text(
+            "Mohon maaf, Tuan. Terjadi kendala saat memproses permintaan Anda."
+        )
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+    uid = update.effective_user.id
+    if not is_valid_user(uid):
+        await update.message.reply_text("🚫 Bot private.")
+        return
+
+    text = update.message.text.strip()
+    text_lower = text.lower()
+    if text in {"📅 Jadwal", "💰 Keuangan", "➕ Tambah", "✏️ Edit", "⚙️ Pengaturan"}:
+        clear_state(uid)
+        if text == "📅 Jadwal":
+            await jadwal.show_hari_ini(update, context)
+        elif text == "💰 Keuangan":
+            await keuangan.show_keuangan(update, context)
+        elif text == "➕ Tambah":
+            await update.message.reply_text(
+                "Ketik 'tambah jadwal' atau 'tambah pengeluaran'."
+            )
+        elif text == "✏️ Edit":
+            await update.message.reply_text("Ketik 'edit jadwal' atau 'edit keuangan'.")
+        else:
+            await settings.show_settings(update, context)
+        return
+
+    state, ctx = get_state(uid)
+    if state:
+        await add.handle_flow(update, context, state, ctx)
+        return
+
+    if add.parse_jadwal_list_text(text):
+        await _handle_legacy_text(update, context)
+        return
+
+    sync_words = (
+        "baruin", "update bot", "tarik kode", "sync", "pull", "restart",
+        "refresh", "ngoding", "update", "tarik",
+    )
+    delete_words = ("hapus", "hapuskan", "hilangkan", "delete")
+    schedule_words = (
+        "jadwal", "kelas", "kuliah", "matkul", "mata kuliah",
+        "pelajaran", "schedule", "class",
+    )
+    edit_words = (
+        "edit", "editi", "editin", "editkan", "mau edit", "ubah", "ubahin",
+        "ubahakan", "rubah", "ganti", "gantikan", "revisi", "perbaiki",
+        "perbaikan", "koreksi", "salah",
+    )
+    settings_words = ("setting", "pengaturan", "notif", "preferensi")
+    if (
+        any(word in text_lower for word in sync_words)
+        or (
+            any(word in text_lower for word in delete_words)
+            and any(word in text_lower for word in schedule_words)
+        )
+        or any(word in text_lower for word in edit_words)
+        or any(word in text_lower for word in settings_words)
+        or (
+            _expense_has_keyword(text_lower)
+            and any(word in text_lower for word in (*delete_words, *edit_words))
+        )
+    ):
+        await _handle_legacy_text(update, context)
+        return
+
+    await _handle_ai_intent(update, context, text)
