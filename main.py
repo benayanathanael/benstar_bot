@@ -8,7 +8,7 @@ import tempfile
 for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
     os.environ.pop(key, None)
 
-from telegram import Update
+from telegram import Message, Update
 from telegram.error import TelegramError
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.request import HTTPXRequest
@@ -21,6 +21,23 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
+
+
+async def _reply_with_voice(message: Message, text: str) -> None:
+    from services.tts_service import generate_voice
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="benstar_voice_reply_") as temp_dir:
+            audio_path = os.path.join(temp_dir, "reply.ogg")
+            voice_path = await generate_voice(text, audio_path)
+            if voice_path is None or not os.path.exists(voice_path):
+                logging.error("TTS tidak menghasilkan file voice reply.")
+                return
+            with open(voice_path, "rb") as voice_file:
+                await message.reply_voice(voice=voice_file, caption=text)
+    except Exception:
+        logging.exception("Gagal mengirim voice reply")
+
 
 async def _post_init(app):
     start_scheduler(app.bot)
@@ -80,18 +97,23 @@ def main():
         intent = result["intent"]
         data = result["data"]
         if intent == "SAPAAN":
-            await msg.edit_text(
+            reply_text = (
                 f"🦾 Selamat datang kembali, {user_name}. Ada yang bisa saya bantu?"
             )
+            await msg.edit_text(reply_text)
+            await _reply_with_voice(update.message, reply_text)
             return
         if intent == "TIDAK_DIMENGERTI":
+            reply_text = "Maaf, instruksi belum dikenali. Silakan coba lagi."
             await msg.edit_text(
                 f"🎙️ Anda berkata: <i>\"{escape(transcript)}\"</i>\n\n"
-                "Maaf, instruksi belum dikenali.",
+                f"{reply_text}",
                 parse_mode="HTML",
             )
+            await _reply_with_voice(update.message, reply_text)
             return
 
+        voice_reply = ""
         try:
             if intent == "LIHAT_JADWAL":
                 hari = data.get("hari", "hari ini")
@@ -106,10 +128,12 @@ def main():
                 else:
                     target_hari = now_wib().weekday()
                 await jadwal.show_jadwal_by_hari(update, context, target_hari)
+                voice_reply = f"Baik, berikut jadwal untuk hari {HARI[target_hari]}."
             elif intent == "TAMBAH_JADWAL":
                 from helpers import esc, valid_jam
                 from states import set_state
 
+                voice_reply = "Saya akan membantu menambahkan jadwal."
                 hari = data.get("hari")
                 matkul = data.get("matkul")
                 jam_mulai = data.get("jam_mulai")
@@ -145,11 +169,17 @@ def main():
                         "Ketik pemilik jadwal: Benaya atau Agnes.",
                         parse_mode="HTML",
                     )
+                    voice_reply = (
+                        f"Jadwal {schedule['matkul']} hari "
+                        f"{HARI[schedule['hari']]} terdeteksi. "
+                        "Silakan pilih pemilik jadwal."
+                    )
                 else:
                     await update.message.reply_text(
                         "Detail jadwal belum lengkap. Silakan lengkapi melalui form berikut."
                     )
                     await add.start_add_jadwal_msg(update, context)
+                    voice_reply = "Detail jadwal belum lengkap. Silakan lengkapi melalui formulir."
             elif intent == "CATAT_UANG":
                 from helpers import rupiah
 
@@ -189,13 +219,20 @@ def main():
                     "Semua data telah diamankan ke dalam database.",
                     parse_mode="HTML",
                 )
+                await _reply_with_voice(
+                    update.message,
+                    f"Berhasil mencatat {len(expenses)} transaksi pengeluaran.",
+                )
                 return
             else:
                 await keuangan.show_keuangan(update, context)
+                voice_reply = "Baik, berikut rekap keuangan."
         except Exception:
             logging.exception("Gagal menjalankan intent voice note: %s", intent)
             await msg.edit_text("❌ Perintah suara gagal dijalankan. Silakan coba lagi.")
             return
+        if voice_reply:
+            await _reply_with_voice(update.message, voice_reply)
         try:
             await msg.delete()
         except TelegramError:
