@@ -1,7 +1,6 @@
 import os
 import logging
 from html import escape
-import asyncio
 import tempfile
 
 # Bersihkan sisa environment variable proxy agar tidak mengganggu koneksi
@@ -12,8 +11,8 @@ from telegram import Message, Update
 from telegram.error import TelegramError
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.request import HTTPXRequest
-from config import BOT_TOKEN, HARI, is_valid_user, now_wib
-from database import db, init_db
+from config import BOT_TOKEN, is_valid_user
+from database import init_db
 from handlers import start, menu, callback, jadwal, keuangan, add, settings
 from services.scheduler import start_scheduler
 
@@ -67,7 +66,6 @@ def main():
 
     async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from services.audio_parser import transcribe_voice
-        from services.ai_parser import parse_expense_with_ai, process_voice_intent
 
         if not is_valid_user(update.effective_user.id):
             await update.message.reply_text("🚫 Bot private.")
@@ -88,151 +86,18 @@ def main():
                 "Menganalisis instruksi...",
                 parse_mode="HTML",
             )
-            result = await asyncio.to_thread(process_voice_intent, transcript)
+            await menu.handle_text(
+                update,
+                context,
+                text_override=transcript,
+                reply_prefix=f'Saya mendengar: "{transcript}"\n\n',
+                voice_reply=_reply_with_voice,
+            )
         except Exception:
             logging.exception("Gagal memproses voice note")
             await msg.edit_text("❌ Gagal memproses voice note. Periksa konfigurasi AI lalu coba lagi.")
             return
 
-        intent = result["intent"]
-        data = result["data"]
-        if intent == "SAPAAN":
-            reply_text = (
-                f"🦾 Selamat datang kembali, {user_name}. Ada yang bisa saya bantu?"
-            )
-            await msg.edit_text(reply_text)
-            await _reply_with_voice(update.message, reply_text)
-            return
-        if intent == "TIDAK_DIMENGERTI":
-            reply_text = "Maaf, instruksi belum dikenali. Silakan coba lagi."
-            await msg.edit_text(
-                f"🎙️ Anda berkata: <i>\"{escape(transcript)}\"</i>\n\n"
-                f"{reply_text}",
-                parse_mode="HTML",
-            )
-            await _reply_with_voice(update.message, reply_text)
-            return
-
-        voice_reply = ""
-        try:
-            if intent == "LIHAT_JADWAL":
-                hari = data.get("hari", "hari ini")
-                hari_map = {nama.lower(): index for index, nama in enumerate(HARI)}
-                relative_days = {"hari ini": 0, "besok": 1, "kemarin": -1}
-                if isinstance(hari, str) and hari.lower() in relative_days:
-                    target_hari = (
-                        now_wib().weekday() + relative_days[hari.lower()]
-                    ) % 7
-                elif isinstance(hari, str) and hari.lower() in hari_map:
-                    target_hari = hari_map[hari.lower()]
-                else:
-                    target_hari = now_wib().weekday()
-                await jadwal.show_jadwal_by_hari(update, context, target_hari)
-                voice_reply = f"Baik, berikut jadwal untuk hari {HARI[target_hari]}."
-            elif intent == "TAMBAH_JADWAL":
-                from helpers import esc, valid_jam
-                from states import set_state
-
-                voice_reply = "Saya akan membantu menambahkan jadwal."
-                hari = data.get("hari")
-                matkul = data.get("matkul")
-                jam_mulai = data.get("jam_mulai")
-                jam_selesai = data.get("jam_selesai")
-                ruangan = data.get("ruangan", "")
-                hari_map = {nama.lower(): index for index, nama in enumerate(HARI)}
-                if (
-                    isinstance(hari, str)
-                    and hari.lower() in hari_map
-                    and isinstance(matkul, str)
-                    and 0 < len(matkul.strip()) <= 200
-                    and isinstance(jam_mulai, str)
-                    and isinstance(jam_selesai, str)
-                    and (mulai := valid_jam(jam_mulai)) is not None
-                    and (selesai := valid_jam(jam_selesai)) is not None
-                    and mulai < selesai
-                    and (not isinstance(ruangan, str) or len(ruangan.strip()) <= 100)
-                ):
-                    cleaned_ruangan = ruangan.strip() if isinstance(ruangan, str) else ""
-                    schedule = {
-                        "hari": hari_map[hari.lower()],
-                        "matkul": matkul.strip(),
-                        "jam_mulai": mulai,
-                        "jam_selesai": selesai,
-                        "ruangan": cleaned_ruangan,
-                    }
-                    set_state(update.effective_user.id, "jf_nl_owner", schedule)
-                    await update.message.reply_text(
-                        f"Data jadwal terbaca:\n"
-                        f"📅 {HARI[schedule['hari']]} {mulai}-{selesai}\n"
-                        f"📚 {esc(schedule['matkul'])}\n"
-                        f"🚪 {esc(cleaned_ruangan) if cleaned_ruangan else '-'}\n\n"
-                        "Ketik pemilik jadwal: Benaya atau Agnes.",
-                        parse_mode="HTML",
-                    )
-                    voice_reply = (
-                        f"Jadwal {schedule['matkul']} hari "
-                        f"{HARI[schedule['hari']]} terdeteksi. "
-                        "Silakan pilih pemilik jadwal."
-                    )
-                else:
-                    await update.message.reply_text(
-                        "Detail jadwal belum lengkap. Silakan lengkapi melalui form berikut."
-                    )
-                    await add.start_add_jadwal_msg(update, context)
-                    voice_reply = "Detail jadwal belum lengkap. Silakan lengkapi melalui formulir."
-            elif intent == "CATAT_UANG":
-                from helpers import rupiah
-
-                expenses = await asyncio.to_thread(parse_expense_with_ai, transcript)
-                if not expenses:
-                    await msg.edit_text(
-                        f"🤖 Suara terdeteksi: <i>\"{escape(transcript)}\"</i>\n\n"
-                        "Namun saya tidak menemukan nominal pengeluaran yang valid.",
-                        parse_mode="HTML",
-                    )
-                    return
-
-                berhasil: list[str] = []
-                with db() as conn:
-                    for expense in expenses:
-                        conn.execute(
-                            """
-                            INSERT INTO pengeluaran (nominal, keterangan, dibayar_oleh, tanggal)
-                            VALUES (?, ?, ?, ?)
-                            """,
-                            (
-                                expense["nominal"],
-                                expense["keterangan"],
-                                update.effective_user.id,
-                                expense["tanggal"],
-                            ),
-                        )
-                        berhasil.append(
-                            f"• {escape(expense['keterangan'].title())} "
-                            f"({rupiah(expense['nominal'])}) - {expense['tanggal']}"
-                        )
-
-                await msg.edit_text(
-                    f"✅ <b>Protokol Pencatatan Selesai, {user_name}.</b>\n\n"
-                    f"Saya telah mencatat {len(expenses)} transaksi:\n"
-                    f"{chr(10).join(berhasil)}\n\n"
-                    "Semua data telah diamankan ke dalam database.",
-                    parse_mode="HTML",
-                )
-                await _reply_with_voice(
-                    update.message,
-                    f"Berhasil mencatat {len(expenses)} transaksi pengeluaran.",
-                )
-                return
-            else:
-                await keuangan.show_keuangan(update, context)
-                voice_reply = "Baik, berikut rekap keuangan."
-        except Exception:
-            logging.exception("Gagal menjalankan intent voice note: %s", intent)
-            await msg.edit_text("❌ Perintah suara gagal dijalankan. Silakan coba lagi.")
-            return
-        if voice_reply:
-            await _reply_with_voice(update.message, voice_reply)
         try:
             await msg.delete()
         except TelegramError:

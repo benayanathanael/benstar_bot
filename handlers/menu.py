@@ -1,6 +1,9 @@
 import asyncio
+import html
 import logging
 import re
+from collections.abc import Awaitable, Callable
+from typing import Any
 from datetime import timedelta
 
 from telegram import Update
@@ -15,6 +18,51 @@ from keyboards import menu_utama
 from states import get_state, clear_state, set_state
 from handlers import jadwal, keuangan, settings, add
 from helpers import rupiah, esc
+
+
+class _PrefixedMessage:
+    def __init__(
+        self,
+        message,
+        prefix: str,
+        voice_reply: Callable[[Any, str], Awaitable[None]] | None = None,
+    ):
+        self._message = message
+        self._prefix = prefix
+        self._voice_reply = voice_reply
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._message, name)
+
+    async def reply_text(self, text: str, *args: Any, **kwargs: Any) -> Any:
+        prefix = self._prefix
+        parse_mode = kwargs.get("parse_mode")
+        if parse_mode is not None and str(parse_mode).lower() == "html":
+            prefix = esc(prefix)
+        response = await self._message.reply_text(
+            f"{prefix}{text}",
+            *args,
+            **kwargs,
+        )
+        if self._voice_reply is not None:
+            voice_text = re.sub(r"<[^>]*>", "", f"{self._prefix}{text}")
+            await self._voice_reply(self._message, html.unescape(voice_text))
+        return response
+
+
+class _PrefixedUpdate:
+    def __init__(
+        self,
+        update: Update,
+        prefix: str,
+        voice_reply: Callable[[Any, str], Awaitable[None]] | None = None,
+    ):
+        self._update = update
+        self.message = _PrefixedMessage(update.message, prefix, voice_reply)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._update, name)
+
 
 def _owner_id_from_text(text: str, current_user_id: int) -> int | None:
     lowered = text.lower()
@@ -187,13 +235,19 @@ async def _handle_expense_command(update, context, text_lower, uid):
 
     return False
 
-async def _handle_legacy_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _handle_legacy_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text_override: str | None = None,
+):
     uid = update.effective_user.id
     if not is_valid_user(uid):
         await update.message.reply_text("🚫 Bot private.")
         return
 
-    text = update.message.text.strip()
+    text = (
+        text_override if text_override is not None else update.message.text
+    ).strip()
     text_lower = text.lower()
 
     # 0. INTENT: UPDATE BOT (Natural Language)
@@ -771,7 +825,15 @@ async def _handle_ai_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
 
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text_override: str | None = None,
+    reply_prefix: str | None = None,
+    voice_reply: Callable[[Any, str], Awaitable[None]] | None = None,
+):
+    if reply_prefix:
+        update = _PrefixedUpdate(update, reply_prefix, voice_reply)
     if not update.message or not update.effective_user:
         return
     uid = update.effective_user.id
@@ -779,7 +841,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 Bot private.")
         return
 
-    text = update.message.text.strip()
+    text = (
+        text_override if text_override is not None else update.message.text
+    ).strip()
     text_lower = text.lower()
     if text in {"📅 Jadwal", "💰 Keuangan", "➕ Tambah", "✏️ Edit", "⚙️ Pengaturan"}:
         clear_state(uid)
@@ -799,11 +863,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state, ctx = get_state(uid)
     if state:
-        await add.handle_flow(update, context, state, ctx)
+        await add.handle_flow(update, context, state, ctx, text_override=text)
         return
 
     if add.parse_jadwal_list_text(text):
-        await _handle_legacy_text(update, context)
+        await _handle_legacy_text(update, context, text_override=text)
         return
 
     sync_words = (
@@ -834,7 +898,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             and any(word in text_lower for word in (*delete_words, *edit_words))
         )
     ):
-        await _handle_legacy_text(update, context)
+        await _handle_legacy_text(update, context, text_override=text)
         return
 
     await _handle_ai_intent(update, context, text)

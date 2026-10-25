@@ -240,11 +240,55 @@ async def start_add_pen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+def _valid_form_jam(text: str) -> str | None:
+    text = text.strip().rstrip(" .,!?:;")
+    normalized = valid_jam(text)
+    if normalized:
+        return normalized
+
+    match = re.fullmatch(r"(?:jam|pukul)\s+(.+)", text.lower())
+    if not match:
+        return None
+
+    spoken = match.group(1)
+    period = None
+    for suffix in ("pagi", "siang", "sore", "malam"):
+        if spoken.endswith(f" {suffix}"):
+            spoken = spoken[: -(len(suffix) + 1)]
+            period = suffix
+            break
+
+    hours = {
+        "satu": 1,
+        "dua": 2,
+        "tiga": 3,
+        "empat": 4,
+        "lima": 5,
+        "enam": 6,
+        "tujuh": 7,
+        "delapan": 8,
+        "sembilan": 9,
+        "sepuluh": 10,
+        "sebelas": 11,
+        "dua belas": 12,
+    }
+    hour = hours.get(spoken)
+    if hour is None and spoken.isdecimal():
+        hour = int(spoken)
+    if hour is None or not 0 <= hour <= 23:
+        return None
+    if period == "pagi" and hour == 12:
+        hour = 0
+    elif period in ("siang", "sore", "malam") and hour < 12:
+        hour += 12
+    return f"{hour:02d}:00"
+
+
 async def _handle_jadwal_form(update, uid, ctx, text):
     step = ctx["step"]
 
     if step == "jam_mulai":
-        jam = valid_jam(text)
+        jam = _valid_form_jam(text)
         if not jam:
             await update.message.reply_text(
                 "❌ Format jam salah.\nKetik seperti <code>08:00</code> atau <code>08.00</code>",
@@ -260,7 +304,7 @@ async def _handle_jadwal_form(update, uid, ctx, text):
         )
 
     elif step == "jam_selesai":
-        jam = valid_jam(text)
+        jam = _valid_form_jam(text)
         if not jam:
             await update.message.reply_text(
                 "❌ Format jam salah.\nKetik seperti <code>09:40</code>", 
@@ -342,9 +386,17 @@ async def _handle_pen_form(update, uid, ctx, text):
             parse_mode="HTML",
         )
 
-async def handle_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, state: str, ctx: dict):
+async def handle_flow(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    state: str,
+    ctx: dict,
+    text_override: str | None = None,
+):
     uid = update.effective_user.id
-    text = update.message.text.strip()
+    text = (
+        text_override if text_override is not None else update.message.text
+    ).strip()
 
     if ctx is None:
         ctx = {}
