@@ -45,7 +45,7 @@ class _PrefixedMessage:
             **kwargs,
         )
         if self._voice_reply is not None:
-            voice_text = re.sub(r"<[^>]*>", "", f"{self._prefix}{text}")
+            voice_text = re.sub(r"<[^>]*>", "", text)
             await self._voice_reply(self._message, html.unescape(voice_text))
         return response
 
